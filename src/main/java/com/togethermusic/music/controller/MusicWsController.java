@@ -90,7 +90,7 @@ public class MusicWsController {
     public void top(MusicIdRequest request, SimpMessageHeaderAccessor accessor) {
         String sessionId = accessor.getSessionId();
         String houseId = houseId(accessor);
-        if (!requireAdmin(houseId, sessionId)) return;
+        if (!requireManager(houseId, sessionId)) return;
         try {
             musicService.top(houseId, request.id());
         } catch (Exception e) {
@@ -102,7 +102,7 @@ public class MusicWsController {
     public void clear(SimpMessageHeaderAccessor accessor) {
         String sessionId = accessor.getSessionId();
         String houseId = houseId(accessor);
-        if (!requireAdmin(houseId, sessionId)) return;
+        if (!requireManager(houseId, sessionId)) return;
         musicService.clear(houseId);
         broadcaster.notifyUser(sessionId, "清空列表成功");
     }
@@ -111,7 +111,7 @@ public class MusicWsController {
     public void blackMusic(MusicIdRequest request, SimpMessageHeaderAccessor accessor) {
         String sessionId = accessor.getSessionId();
         String houseId = houseId(accessor);
-        if (!requireAdmin(houseId, sessionId)) return;
+        if (!requireManager(houseId, sessionId)) return;
         try {
             musicService.blackMusic(houseId, request.id());
             broadcaster.notifyUser(sessionId, "音乐拉黑成功");
@@ -124,7 +124,7 @@ public class MusicWsController {
     public void unblackMusic(MusicIdRequest request, SimpMessageHeaderAccessor accessor) {
         String sessionId = accessor.getSessionId();
         String houseId = houseId(accessor);
-        if (!requireAdmin(houseId, sessionId)) return;
+        if (!requireManager(houseId, sessionId)) return;
         try {
             musicService.unblackMusic(houseId, request.id());
             broadcaster.notifyUser(sessionId, "音乐漂白成功");
@@ -137,7 +137,7 @@ public class MusicWsController {
     public void banChoose(@DestinationVariable boolean ban, SimpMessageHeaderAccessor accessor) {
         String sessionId = accessor.getSessionId();
         String houseId = houseId(accessor);
-        if (!requireAdmin(houseId, sessionId)) return;
+        if (!requireManager(houseId, sessionId)) return;
         musicService.setSearchEnabled(houseId, !ban);
     }
 
@@ -145,7 +145,7 @@ public class MusicWsController {
     public void banSwitch(@DestinationVariable boolean ban, SimpMessageHeaderAccessor accessor) {
         String sessionId = accessor.getSessionId();
         String houseId = houseId(accessor);
-        if (!requireAdmin(houseId, sessionId)) return;
+        if (!requireManager(houseId, sessionId)) return;
         musicService.setSwitchEnabled(houseId, !ban);
     }
 
@@ -153,7 +153,7 @@ public class MusicWsController {
     public void goodModel(@DestinationVariable boolean enabled, SimpMessageHeaderAccessor accessor) {
         String sessionId = accessor.getSessionId();
         String houseId = houseId(accessor);
-        if (!requireAdmin(houseId, sessionId)) return;
+        if (!requireManager(houseId, sessionId)) return;
         musicService.setGoodModel(houseId, enabled);
     }
 
@@ -161,7 +161,7 @@ public class MusicWsController {
     public void musicCircle(@DestinationVariable boolean enabled, SimpMessageHeaderAccessor accessor) {
         String sessionId = accessor.getSessionId();
         String houseId = houseId(accessor);
-        if (!requireAdmin(houseId, sessionId)) return;
+        if (!requireManager(houseId, sessionId)) return;
         musicService.setMusicCircle(houseId, enabled);
     }
 
@@ -169,7 +169,7 @@ public class MusicWsController {
     public void listCircle(@DestinationVariable boolean enabled, SimpMessageHeaderAccessor accessor) {
         String sessionId = accessor.getSessionId();
         String houseId = houseId(accessor);
-        if (!requireAdmin(houseId, sessionId)) return;
+        if (!requireManager(houseId, sessionId)) return;
         musicService.setListCircle(houseId, enabled);
     }
 
@@ -177,7 +177,7 @@ public class MusicWsController {
     public void randomModel(@DestinationVariable boolean enabled, SimpMessageHeaderAccessor accessor) {
         String sessionId = accessor.getSessionId();
         String houseId = houseId(accessor);
-        if (!requireAdmin(houseId, sessionId)) return;
+        if (!requireManager(houseId, sessionId)) return;
         musicService.setRandomModel(houseId, enabled);
     }
 
@@ -185,7 +185,7 @@ public class MusicWsController {
     public void volume(@DestinationVariable int volume, SimpMessageHeaderAccessor accessor) {
         String sessionId = accessor.getSessionId();
         String houseId = houseId(accessor);
-        if (!requireAdmin(houseId, sessionId)) return;
+        if (!requireManager(houseId, sessionId)) return;
         musicService.setVolume(houseId, volume);
     }
 
@@ -217,7 +217,7 @@ public class MusicWsController {
     public void voteRate(@DestinationVariable float rate, SimpMessageHeaderAccessor accessor) {
         String sessionId = accessor.getSessionId();
         String houseId = houseId(accessor);
-        if (!requireAdmin(houseId, sessionId)) return;
+        if (!requireManager(houseId, sessionId)) return;
         if (rate <= 0 || rate > 1) {
             broadcaster.notifyUser(sessionId, "投票率需在 (0, 1] 区间");
             return;
@@ -229,7 +229,7 @@ public class MusicWsController {
     public void setDefaultPlaylist(DefaultPlaylistRequest request, SimpMessageHeaderAccessor accessor) {
         String sessionId = accessor.getSessionId();
         String houseId = houseId(accessor);
-        if (!requireAdmin(houseId, sessionId)) return;
+        if (!requireManager(houseId, sessionId)) return;
         int count = musicService.addDefaultPlaylist(houseId, request.playlistId(), request.source());
         broadcaster.notifyUser(sessionId, "已添加 " + count + " 首歌至默认播放列表");
     }
@@ -238,7 +238,7 @@ public class MusicWsController {
     public void clearDefaultPlaylist(SimpMessageHeaderAccessor accessor) {
         String sessionId = accessor.getSessionId();
         String houseId = houseId(accessor);
-        if (!requireAdmin(houseId, sessionId)) return;
+        if (!requireManager(houseId, sessionId)) return;
         musicService.clearDefaultPlaylist(houseId);
         broadcaster.notifyUser(sessionId, "默认播放列表已清空");
     }
@@ -247,7 +247,7 @@ public class MusicWsController {
     public void showBlackMusic(SimpMessageHeaderAccessor accessor) {
         String sessionId = accessor.getSessionId();
         String houseId = houseId(accessor);
-        if (!requireAdmin(houseId, sessionId)) return;
+        if (!requireManager(houseId, sessionId)) return;
         String list = musicService.getBlackMusicList(houseId);
         broadcaster.notifyUser(sessionId, list.isBlank() ? "暂无拉黑列表" : list);
     }
@@ -259,13 +259,13 @@ public class MusicWsController {
         return attrs != null ? (String) attrs.get("houseId") : null;
     }
 
-    private boolean requireAdmin(String houseId, String sessionId) {
+    private boolean requireManager(String houseId, String sessionId) {
         if (houseId == null) {
             broadcaster.notifyUser(sessionId, "未加入任何房间");
             return false;
         }
         SessionUser user = sessionRepo.get(houseId, sessionId).orElse(null);
-        if (user == null || !user.isAdmin()) {
+        if (user == null || !user.isManager()) {
             broadcaster.notifyUser(sessionId, "你没有权限");
             return false;
         }

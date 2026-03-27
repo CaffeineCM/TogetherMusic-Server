@@ -7,6 +7,7 @@ import com.togethermusic.repository.RoomRedisRepository;
 import com.togethermusic.repository.SessionRedisRepository;
 import com.togethermusic.room.dto.CreateRoomRequest;
 import com.togethermusic.room.dto.JoinRoomRequest;
+import com.togethermusic.room.dto.RoomSessionView;
 import com.togethermusic.room.dto.RoomSummary;
 import com.togethermusic.room.model.House;
 import com.togethermusic.room.model.SessionUser;
@@ -28,6 +29,7 @@ public class RoomService {
     private final SessionRedisRepository sessionRepository;
     private final UserMusicAccountRepository accountRepository;
     private final TogetherMusicProperties properties;
+    private final RoomPermissionService roomPermissionService;
 
     /**
      * 创建房间
@@ -154,6 +156,19 @@ public class RoomService {
         sessionRepository.get(houseId, sessionId).ifPresent(user -> {
             sessionRepository.put(houseId, user.withDisplayName(displayName));
         });
+    }
+
+    public RoomSessionView buildRoomSessionView(House house, String currentSessionId, String currentUserRole) {
+        return RoomSessionView.from(
+                house,
+                (int) sessionRepository.count(house.getId()),
+                currentSessionId,
+                currentUserRole
+        );
+    }
+
+    public String resolveRole(House house, String sessionId, String remoteAddress, Long registeredUserId) {
+        return roomPermissionService.resolveRole(house, sessionId, remoteAddress, registeredUserId);
     }
 
     /**

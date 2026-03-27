@@ -8,6 +8,7 @@ import com.togethermusic.music.adapter.RoomAwareAdapterRouter;
 import com.togethermusic.music.dto.PlaybackSnapshot;
 import com.togethermusic.music.model.Music;
 import com.togethermusic.music.model.RoomConfig;
+import com.togethermusic.music.service.MusicService;
 import com.togethermusic.repository.ConfigRedisRepository;
 import com.togethermusic.repository.PickListRedisRepository;
 import com.togethermusic.repository.RoomRedisRepository;
@@ -41,6 +42,7 @@ public class MusicJob {
     private final VoteRedisRepository voteRepo;
     private final MusicSourceRegistry registry;
     private final RoomAwareAdapterRouter adapterRouter;
+    private final MusicService musicService;
     private final MessageBroadcaster broadcaster;
     private final TogetherMusicProperties properties;
 
@@ -94,6 +96,7 @@ public class MusicJob {
                             .build(),
                     "暂无歌曲"
             );
+            broadcaster.broadcastToRoom(houseId, MessageType.PICK, musicService.getPickList(houseId), "点歌列表");
             return;
         }
 
@@ -131,6 +134,7 @@ public class MusicJob {
                         .build(),
                 "当前播放"
         );
+        broadcaster.broadcastToRoom(houseId, MessageType.PICK, musicService.getPickList(houseId), "点歌列表");
     }
 
     /**

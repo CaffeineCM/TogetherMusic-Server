@@ -42,6 +42,7 @@ public class SessionLifecycleService {
     private final ConfigRedisRepository configRepository;
     private final VoteRedisRepository voteRepository;
     private final MessageBroadcaster broadcaster;
+    private final RoomPermissionService roomPermissionService;
     private final ScheduledExecutorService destroyScheduler = Executors.newSingleThreadScheduledExecutor();
     private final Map<String, ScheduledFuture<?>> pendingDestroyTasks = new ConcurrentHashMap<>();
 
@@ -58,12 +59,16 @@ public class SessionLifecycleService {
         Long registeredUserId = (Long) attrs.get("registeredUserId");
         String remoteAddress = (String) attrs.getOrDefault("remoteAddress", "unknown");
 
+        String role = roomRepository.findById(houseId)
+                .map(house -> roomPermissionService.resolveRole(house, sessionId, remoteAddress, registeredUserId))
+                .orElse(SessionUser.ROLE_MEMBER);
+
         // 构建显示名：登录用户后续由 RoomService 设置昵称，此处先用 IP 脱敏
         String displayName = ClientIpUtils.buildGuestDisplayName(remoteAddress, sessionId);
 
         SessionUser user = new SessionUser(
                 sessionId, houseId, displayName,
-                remoteAddress, SessionUser.ROLE_DEFAULT,
+                remoteAddress, role,
                 null, registeredUserId
         );
         sessionRepository.put(houseId, user);
@@ -87,7 +92,6 @@ public class SessionLifecycleService {
         broadcastOnlineUsers(houseId);
 
         if (sessionRepository.count(houseId) == 0) {
-            clearEmptyRoomRuntimeState(houseId);
             scheduleEmptyRoomDestroy(houseId);
         }
 
@@ -109,9 +113,9 @@ public class SessionLifecycleService {
                 pendingDestroyTasks.remove(houseId);
                 return;
             }
+            clearEmptyRoomRuntimeState(houseId);
             roomRepository.findById(houseId).ifPresent(house -> {
                 if (Boolean.TRUE.equals(house.getCanDestroy())) {
-                    roomRepository.clearPlaying(houseId);
                     roomRepository.delete(houseId);
                     if (house.getRemoteAddress() != null && !house.getRemoteAddress().isBlank()) {
                         roomRepository.removeIpHouse(house.getRemoteAddress(), houseId);

@@ -9,6 +9,7 @@ import com.togethermusic.repository.RoomRedisRepository;
 import com.togethermusic.repository.SessionRedisRepository;
 import com.togethermusic.room.dto.CreateRoomRequest;
 import com.togethermusic.room.dto.JoinRoomRequest;
+import com.togethermusic.room.dto.RoomSessionView;
 import com.togethermusic.room.model.House;
 import com.togethermusic.room.model.SessionUser;
 import com.togethermusic.music.service.MusicService;
@@ -67,16 +68,17 @@ public class RoomWsController {
                 attrs.put("houseId", house.getId());
             }
 
-            ensureSessionJoined(house.getId(), sessionId, attrs);
+            String currentRole = ensureSessionJoined(house, sessionId, attrs);
 
             // 如果是登录用户，同步昵称
             syncNicknameIfLoggedIn(accessor, house.getId(), sessionId);
 
             broadcaster.broadcastToRoom(house.getId(), MessageType.ONLINE, roomService.getRoomUsers(house.getId()));
             syncCurrentPlaying(sessionId, house.getId());
+            RoomSessionView roomView = roomService.buildRoomSessionView(house, sessionId, currentRole);
 
             log.info("WS createRoom success: session={}, houseId={}", sessionId, house.getId());
-            return Response.success(house, "房间创建成功", MessageType.ADD_HOUSE.name());
+            return Response.success(roomView, "房间创建成功", MessageType.ADD_HOUSE.name());
         } catch (Exception e) {
             log.warn("WS createRoom failed: session={}, error={}", sessionId, e.getMessage());
             return new Response<>(
@@ -103,7 +105,7 @@ public class RoomWsController {
                 attrs.put("houseId", house.getId());
             }
 
-            ensureSessionJoined(house.getId(), sessionId, attrs);
+            String currentRole = ensureSessionJoined(house, sessionId, attrs);
 
             syncNicknameIfLoggedIn(accessor, house.getId(), sessionId);
 
@@ -114,9 +116,10 @@ public class RoomWsController {
 
             broadcaster.broadcastToRoom(house.getId(), MessageType.ONLINE, roomService.getRoomUsers(house.getId()));
             syncCurrentPlaying(sessionId, house.getId());
+            RoomSessionView roomView = roomService.buildRoomSessionView(house, sessionId, currentRole);
 
             log.info("WS joinRoom success: session={}, houseId={}", sessionId, house.getId());
-            return Response.success(house, "进入房间成功", MessageType.ENTER_HOUSE.name());
+            return Response.success(roomView, "进入房间成功", MessageType.ENTER_HOUSE.name());
         } catch (Exception e) {
             log.warn("WS joinRoom failed: session={}, houseId={}, error={}", sessionId, request.houseId(), e.getMessage());
             return new Response<>(
@@ -165,30 +168,23 @@ public class RoomWsController {
         }
     }
 
-    private void ensureSessionJoined(String houseId, String sessionId, Map<String, Object> attrs) {
+    private String ensureSessionJoined(House house, String sessionId, Map<String, Object> attrs) {
+        String houseId = house.getId();
         sessionLifecycleService.cancelPendingDestroy(houseId);
-        if (sessionRepository.exists(houseId, sessionId)) {
-            return;
-        }
 
         String remoteAddress = attrs != null ? (String) attrs.getOrDefault("remoteAddress", "unknown") : "unknown";
         Long registeredUserId = attrs != null ? (Long) attrs.get("registeredUserId") : null;
+        String role = roomService.resolveRole(house, sessionId, remoteAddress, registeredUserId);
         String displayName = resolveDisplayName(registeredUserId, remoteAddress)
                 .orElseGet(() -> ClientIpUtils.buildGuestDisplayName(remoteAddress, sessionId));
-        SessionUser user = new SessionUser(
-                sessionId,
-                houseId,
-                displayName,
-                remoteAddress,
-                SessionUser.ROLE_DEFAULT,
-                null,
-                registeredUserId
-        );
+        SessionUser user = new SessionUser(sessionId, houseId, displayName, remoteAddress, role, null, registeredUserId);
         sessionRepository.put(houseId, user);
+        return role;
     }
 
     private void syncCurrentPlaying(String sessionId, String houseId) {
         broadcaster.sendToUser(sessionId, MessageType.PLAYBACK, musicService.getPlaybackSnapshot(houseId), "当前播放状态");
+        broadcaster.sendToUser(sessionId, MessageType.PICK, musicService.getPickList(houseId), "点歌列表");
     }
 
     private java.util.Optional<String> resolveDisplayName(Long registeredUserId, String remoteAddress) {

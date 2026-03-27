@@ -31,6 +31,8 @@ public enum MessageType {
     SEARCH_HOUSE,
     /** 管理员鉴权结果 */
     AUTH_ADMIN,
+    /** 用户黑名单 */
+    BLACKLIST,
     /** 被踢出通知 */
     KICK
 }

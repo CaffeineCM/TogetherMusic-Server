@@ -50,7 +50,7 @@ public class MusicService {
     public void pick(String houseId, String sessionId, String keyword, String source, String quality) {
         // 禁止点歌检查（管理员不受限）
         SessionUser user = sessionRepo.get(houseId, sessionId).orElseThrow();
-        if (!user.isAdmin()) {
+        if (!user.isManager()) {
             Boolean searchEnabled = configRepo.getBoolean(houseId, RoomConfig.SEARCH_ENABLED);
             if (Boolean.FALSE.equals(searchEnabled)) {
                 throw new BusinessException(ErrorCode.MUSIC_SEARCH_DISABLED);
@@ -78,7 +78,7 @@ public class MusicService {
      */
     public void pickById(String houseId, String sessionId, String musicId, String source, String quality) {
         SessionUser user = sessionRepo.get(houseId, sessionId).orElseThrow();
-        if (!user.isAdmin()) {
+        if (!user.isManager()) {
             Boolean searchEnabled = configRepo.getBoolean(houseId, RoomConfig.SEARCH_ENABLED);
             if (Boolean.FALSE.equals(searchEnabled)) {
                 throw new BusinessException(ErrorCode.MUSIC_SEARCH_DISABLED);
@@ -151,7 +151,7 @@ public class MusicService {
 
     public void delete(String houseId, String sessionId, String musicId) {
         SessionUser user = sessionRepo.get(houseId, sessionId).orElse(null);
-        boolean isAdmin = user != null && user.isAdmin();
+        boolean isAdmin = user != null && user.isManager();
 
         // 非管理员只能删除自己点的歌
         if (!isAdmin) {
@@ -222,7 +222,7 @@ public class MusicService {
     public void vote(String houseId, String sessionId) {
         Boolean switchEnabled = configRepo.getBoolean(houseId, RoomConfig.SWITCH_ENABLED);
         SessionUser user = sessionRepo.get(houseId, sessionId).orElse(null);
-        boolean isAdmin = user != null && user.isAdmin();
+        boolean isAdmin = user != null && user.isManager();
 
         if (!isAdmin && Boolean.FALSE.equals(switchEnabled)) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "当前禁止切歌");

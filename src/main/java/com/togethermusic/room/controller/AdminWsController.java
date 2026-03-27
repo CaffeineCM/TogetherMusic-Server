@@ -32,33 +32,12 @@ public class AdminWsController {
     private final RoomService roomService;
     private final MessageBroadcaster broadcaster;
 
-    // ---- 管理员鉴权 ----
+    // ---- 兼容旧接口 ----
 
     @MessageMapping("/auth/admin")
     public void authAdmin(AuthRequest request, SimpMessageHeaderAccessor accessor) {
         String sessionId = accessor.getSessionId();
-        String houseId = houseId(accessor);
-        if (houseId == null) return;
-
-        House house = roomService.getRoom(houseId);
-        String adminPwd = house.getAdminPwd();
-
-        if (adminPwd == null || adminPwd.isBlank()) {
-            broadcaster.notifyUser(sessionId, "该房间未设置管理员密码");
-            return;
-        }
-
-        if (!adminPwd.equals(request.password())) {
-            broadcaster.notifyUser(sessionId, "管理员密码错误");
-            return;
-        }
-
-        sessionRepo.get(houseId, sessionId).ifPresent(user -> {
-            SessionUser admin = user.withRole(SessionUser.ROLE_ADMIN);
-            sessionRepo.put(houseId, admin);
-            broadcaster.sendToUser(sessionId, MessageType.AUTH_ADMIN, "admin", "已获得管理员权限");
-            log.info("[{}] User {} became admin", houseId, sessionId);
-        });
+        broadcaster.notifyUser(sessionId, "管理员权限请由房主在在线用户列表中设置");
     }
 
     @MessageMapping("/auth/root")
@@ -66,27 +45,61 @@ public class AdminWsController {
         String sessionId = accessor.getSessionId();
         String houseId = houseId(accessor);
         if (houseId == null) return;
+        broadcaster.notifyUser(sessionId, "root 角色已停用，房主拥有最高权限");
+    }
 
-        House house = roomService.getRoom(houseId);
-        // root 密码与 admin 密码相同，但角色更高
-        String adminPwd = house.getAdminPwd();
+    // ---- 管理员授权 ----
 
-        if (adminPwd == null || adminPwd.isBlank()) {
-            broadcaster.notifyUser(sessionId, "该房间未设置管理员密码");
+    @MessageMapping("/user/admin/{targetSessionId}")
+    public void grantAdmin(@DestinationVariable String targetSessionId, SimpMessageHeaderAccessor accessor) {
+        String sessionId = accessor.getSessionId();
+        String houseId = houseId(accessor);
+        if (!requireOwner(houseId, sessionId)) return;
+
+        SessionUser target = sessionRepo.get(houseId, targetSessionId).orElse(null);
+        if (target == null) {
+            broadcaster.notifyUser(sessionId, "用户不存在");
+            return;
+        }
+        if (target.isOwner()) {
+            broadcaster.notifyUser(sessionId, "房主不需要设置为管理员");
+            return;
+        }
+        if (target.isAdmin()) {
+            broadcaster.notifyUser(sessionId, target.displayName() + " 已经是管理员");
             return;
         }
 
-        if (!adminPwd.equals(request.password())) {
-            broadcaster.notifyUser(sessionId, "密码错误");
+        sessionRepo.put(houseId, target.withRole(SessionUser.ROLE_ADMIN));
+        broadcaster.notifyUser(sessionId, "已设置管理员：" + target.displayName());
+        broadcaster.sendToUser(targetSessionId, MessageType.NOTICE, null, "你已被房主设置为管理员");
+        broadcaster.broadcastToRoom(houseId, MessageType.ONLINE, roomService.getRoomUsers(houseId));
+    }
+
+    @MessageMapping("/user/member/{targetSessionId}")
+    public void revokeAdmin(@DestinationVariable String targetSessionId, SimpMessageHeaderAccessor accessor) {
+        String sessionId = accessor.getSessionId();
+        String houseId = houseId(accessor);
+        if (!requireOwner(houseId, sessionId)) return;
+
+        SessionUser target = sessionRepo.get(houseId, targetSessionId).orElse(null);
+        if (target == null) {
+            broadcaster.notifyUser(sessionId, "用户不存在");
+            return;
+        }
+        if (target.isOwner()) {
+            broadcaster.notifyUser(sessionId, "不能修改房主角色");
+            return;
+        }
+        if (!target.isAdmin()) {
+            broadcaster.notifyUser(sessionId, target.displayName() + " 当前不是管理员");
             return;
         }
 
-        sessionRepo.get(houseId, sessionId).ifPresent(user -> {
-            SessionUser root = user.withRole(SessionUser.ROLE_ROOT);
-            sessionRepo.put(houseId, root);
-            broadcaster.sendToUser(sessionId, MessageType.AUTH_ADMIN, "root", "已获得 root 权限");
-            log.info("[{}] User {} became root", houseId, sessionId);
-        });
+        sessionRepo.put(houseId, target.withRole(SessionUser.ROLE_MEMBER));
+        broadcaster.notifyUser(sessionId, "已取消管理员：" + target.displayName());
+        broadcaster.sendToUser(targetSessionId, MessageType.NOTICE, null, "你的管理员权限已被房主取消");
+        broadcaster.broadcastToRoom(houseId, MessageType.ONLINE, roomService.getRoomUsers(houseId));
     }
 
     // ---- 踢人 ----
@@ -95,11 +108,16 @@ public class AdminWsController {
     public void kick(@DestinationVariable String targetSessionId, SimpMessageHeaderAccessor accessor) {
         String sessionId = accessor.getSessionId();
         String houseId = houseId(accessor);
-        if (!requireAdmin(houseId, sessionId)) return;
+        if (!requireManager(houseId, sessionId)) return;
 
         SessionUser target = sessionRepo.get(houseId, targetSessionId).orElse(null);
         if (target == null) {
             broadcaster.notifyUser(sessionId, "用户不存在");
+            return;
+        }
+        SessionUser actor = sessionRepo.get(houseId, sessionId).orElse(null);
+        if (!canManageTarget(actor, target)) {
+            broadcaster.notifyUser(sessionId, "你不能操作该用户");
             return;
         }
 
@@ -127,11 +145,16 @@ public class AdminWsController {
     public void blackUser(@DestinationVariable String targetSessionId, SimpMessageHeaderAccessor accessor) {
         String sessionId = accessor.getSessionId();
         String houseId = houseId(accessor);
-        if (!requireAdmin(houseId, sessionId)) return;
+        if (!requireManager(houseId, sessionId)) return;
 
         SessionUser target = sessionRepo.get(houseId, targetSessionId).orElse(null);
         if (target == null) {
             broadcaster.notifyUser(sessionId, "用户不存在");
+            return;
+        }
+        SessionUser actor = sessionRepo.get(houseId, sessionId).orElse(null);
+        if (!canManageTarget(actor, target)) {
+            broadcaster.notifyUser(sessionId, "你不能操作该用户");
             return;
         }
 
@@ -145,6 +168,7 @@ public class AdminWsController {
         broadcaster.sendToUser(targetSessionId, MessageType.KICK, null, "你已被管理员拉黑");
         sessionRepo.remove(houseId, targetSessionId);
         broadcaster.notifyUser(sessionId, "已拉黑用户：" + target.displayName());
+        broadcaster.sendToUser(sessionId, MessageType.BLACKLIST, blackListRepo.getBlacklistedUsers(houseId), "用户黑名单");
         log.info("[{}] Admin {} blacklisted user {}", houseId, sessionId, targetSessionId);
     }
 
@@ -152,21 +176,21 @@ public class AdminWsController {
     public void unblackUser(@DestinationVariable String targetSessionId, SimpMessageHeaderAccessor accessor) {
         String sessionId = accessor.getSessionId();
         String houseId = houseId(accessor);
-        if (!requireAdmin(houseId, sessionId)) return;
+        if (!requireManager(houseId, sessionId)) return;
 
         blackListRepo.unblackUser(houseId, targetSessionId);
         broadcaster.notifyUser(sessionId, "已漂白用户：" + targetSessionId);
+        broadcaster.sendToUser(sessionId, MessageType.BLACKLIST, blackListRepo.getBlacklistedUsers(houseId), "用户黑名单");
     }
 
     @MessageMapping("/user/blacklist")
     public void showBlackUsers(SimpMessageHeaderAccessor accessor) {
         String sessionId = accessor.getSessionId();
         String houseId = houseId(accessor);
-        if (!requireAdmin(houseId, sessionId)) return;
+        if (!requireManager(houseId, sessionId)) return;
 
         Set<String> list = blackListRepo.getBlacklistedUsers(houseId);
-        String result = list.isEmpty() ? "暂无用户黑名单" : String.join(", ", list);
-        broadcaster.notifyUser(sessionId, result);
+        broadcaster.sendToUser(sessionId, MessageType.BLACKLIST, list, "用户黑名单");
     }
 
     // ---- 工具方法 ----
@@ -176,17 +200,46 @@ public class AdminWsController {
         return attrs != null ? (String) attrs.get("houseId") : null;
     }
 
-    private boolean requireAdmin(String houseId, String sessionId) {
+    private boolean requireManager(String houseId, String sessionId) {
         if (houseId == null) {
             broadcaster.notifyUser(sessionId, "未加入任何房间");
             return false;
         }
         SessionUser user = sessionRepo.get(houseId, sessionId).orElse(null);
-        if (user == null || !user.isAdmin()) {
+        if (user == null || !user.isManager()) {
             broadcaster.notifyUser(sessionId, "你没有权限");
             return false;
         }
         return true;
+    }
+
+    private boolean requireOwner(String houseId, String sessionId) {
+        if (houseId == null) {
+            broadcaster.notifyUser(sessionId, "未加入任何房间");
+            return false;
+        }
+        SessionUser user = sessionRepo.get(houseId, sessionId).orElse(null);
+        if (user == null || !user.isOwner()) {
+            broadcaster.notifyUser(sessionId, "只有房主可以管理管理员权限");
+            return false;
+        }
+        return true;
+    }
+
+    private boolean canManageTarget(SessionUser actor, SessionUser target) {
+        if (actor == null || target == null) {
+            return false;
+        }
+        if (actor.sessionId().equals(target.sessionId())) {
+            return false;
+        }
+        if (target.isOwner()) {
+            return false;
+        }
+        if (actor.isOwner()) {
+            return true;
+        }
+        return actor.isAdmin() && !target.isAdmin();
     }
 
     public record AuthRequest(String password) {}

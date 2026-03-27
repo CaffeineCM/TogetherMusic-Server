@@ -19,9 +19,10 @@ public record SessionUser(
         Long registeredUserId
 ) implements Serializable {
 
-    public static final String ROLE_DEFAULT = "default";
+    public static final String ROLE_OWNER = "owner";
     public static final String ROLE_ADMIN = "admin";
-    public static final String ROLE_ROOT = "root";
+    public static final String ROLE_MEMBER = "member";
+    public static final String ROLE_DEFAULT = "default";
 
     public SessionUser withRole(String newRole) {
         return new SessionUser(sessionId, houseId, displayName, remoteAddress, newRole, lastMessageTime, registeredUserId);
@@ -35,7 +36,15 @@ public record SessionUser(
         return new SessionUser(sessionId, houseId, displayName, remoteAddress, role, time, registeredUserId);
     }
 
+    public boolean isOwner() {
+        return ROLE_OWNER.equals(role);
+    }
+
     public boolean isAdmin() {
-        return ROLE_ADMIN.equals(role) || ROLE_ROOT.equals(role);
+        return ROLE_ADMIN.equals(role);
+    }
+
+    public boolean isManager() {
+        return isOwner() || isAdmin();
     }
 }
