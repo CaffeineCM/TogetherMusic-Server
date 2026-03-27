@@ -322,7 +322,7 @@ public class MusicService {
         return PlaybackSnapshot.builder()
                 .music(music)
                 .status(status)
-                .positionMs(resolvePosition(music, status, storedPosition, updatedAt, now))
+                .positionMs(clampPosition(music, storedPosition))
                 .updatedAt(updatedAt)
                 .serverTime(now)
                 .build();
