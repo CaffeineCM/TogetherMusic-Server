@@ -2,6 +2,7 @@ package com.togethermusic.room.service;
 
 import com.togethermusic.common.websocket.MessageBroadcaster;
 import com.togethermusic.common.websocket.MessageType;
+import com.togethermusic.common.util.ClientIpUtils;
 import com.togethermusic.music.model.RoomConfig;
 import com.togethermusic.repository.ConfigRedisRepository;
 import com.togethermusic.repository.RoomRedisRepository;
@@ -58,7 +59,7 @@ public class SessionLifecycleService {
         String remoteAddress = (String) attrs.getOrDefault("remoteAddress", "unknown");
 
         // 构建显示名：登录用户后续由 RoomService 设置昵称，此处先用 IP 脱敏
-        String displayName = desensitizeIp(remoteAddress);
+        String displayName = ClientIpUtils.buildGuestDisplayName(remoteAddress, sessionId);
 
         SessionUser user = new SessionUser(
                 sessionId, houseId, displayName,
@@ -136,14 +137,5 @@ public class SessionLifecycleService {
     private void broadcastOnlineUsers(String houseId) {
         List<SessionUser> users = sessionRepository.findAll(houseId);
         broadcaster.broadcastToRoom(houseId, MessageType.ONLINE, users);
-    }
-
-    private String desensitizeIp(String ip) {
-        if (ip == null || ip.isBlank()) return "匿名用户";
-        String[] parts = ip.split("\\.");
-        if (parts.length == 4) {
-            return parts[0] + "." + parts[1] + ".*.*";
-        }
-        return ip.substring(0, Math.min(ip.length(), 6)) + "***";
     }
 }

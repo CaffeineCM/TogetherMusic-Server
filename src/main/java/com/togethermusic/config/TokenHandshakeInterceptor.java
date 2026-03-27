@@ -1,6 +1,7 @@
 package com.togethermusic.config;
 
 import cn.dev33.satoken.stp.StpUtil;
+import com.togethermusic.common.util.ClientIpUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
@@ -9,7 +10,6 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.server.HandshakeInterceptor;
 
-import java.net.InetSocketAddress;
 import java.util.Map;
 
 /**
@@ -74,23 +74,6 @@ public class TokenHandshakeInterceptor implements HandshakeInterceptor {
     }
 
     private String extractRemoteAddress(ServerHttpRequest request) {
-        String forwardedFor = request.getHeaders().getFirst("X-Forwarded-For");
-        if (StringUtils.hasText(forwardedFor)) {
-            return forwardedFor.split(",")[0].trim();
-        }
-
-        String realIp = request.getHeaders().getFirst("X-Real-IP");
-        if (StringUtils.hasText(realIp)) {
-            return realIp.trim();
-        }
-
-        InetSocketAddress remoteAddress = request.getRemoteAddress();
-        if (remoteAddress != null && remoteAddress.getAddress() != null) {
-            return remoteAddress.getAddress().getHostAddress();
-        }
-        if (remoteAddress != null && StringUtils.hasText(remoteAddress.getHostString())) {
-            return remoteAddress.getHostString();
-        }
-        return "unknown";
+        return ClientIpUtils.extractClientIp(request.getHeaders(), request.getRemoteAddress());
     }
 }

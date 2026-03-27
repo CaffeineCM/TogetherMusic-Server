@@ -2,6 +2,7 @@ package com.togethermusic.room.controller;
 
 import com.togethermusic.common.code.ErrorCode;
 import com.togethermusic.common.response.Response;
+import com.togethermusic.common.util.ClientIpUtils;
 import com.togethermusic.common.websocket.MessageBroadcaster;
 import com.togethermusic.common.websocket.MessageType;
 import com.togethermusic.repository.RoomRedisRepository;
@@ -173,7 +174,7 @@ public class RoomWsController {
         String remoteAddress = attrs != null ? (String) attrs.getOrDefault("remoteAddress", "unknown") : "unknown";
         Long registeredUserId = attrs != null ? (Long) attrs.get("registeredUserId") : null;
         String displayName = resolveDisplayName(registeredUserId, remoteAddress)
-                .orElseGet(() -> desensitizeIp(remoteAddress));
+                .orElseGet(() -> ClientIpUtils.buildGuestDisplayName(remoteAddress, sessionId));
         SessionUser user = new SessionUser(
                 sessionId,
                 houseId,
@@ -202,16 +203,7 @@ public class RoomWsController {
                     if (user.getUsername() != null && !user.getUsername().isBlank()) {
                         return user.getUsername();
                     }
-                    return remoteAddress != null ? desensitizeIp(remoteAddress) : "匿名用户";
+                    return remoteAddress != null ? ClientIpUtils.buildGuestDisplayName(remoteAddress, null) : "匿名用户";
                 });
-    }
-
-    private String desensitizeIp(String ip) {
-        if (ip == null || ip.isBlank()) return "匿名用户";
-        String[] parts = ip.split("\\.");
-        if (parts.length == 4) {
-            return parts[0] + "." + parts[1] + ".*.*";
-        }
-        return ip.substring(0, Math.min(ip.length(), 6)) + "***";
     }
 }
