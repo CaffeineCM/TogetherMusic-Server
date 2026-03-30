@@ -194,7 +194,7 @@ public class KugouAccountService {
 
     public KugouAccountStatusResponse validateCurrentUser(Long userId) {
         return accountRepository.findByUserIdAndSource(userId, SOURCE)
-                .map(account -> buildStatus(account.getAuthToken()))
+                .map(this::validateStoredAccount)
                 .orElseGet(() -> invalid("未授权"));
     }
 
@@ -238,6 +238,41 @@ public class KugouAccountService {
                 .valid(status.valid())
                 .nickname(status.nickname())
                 .message(status.valid() ? "授权已刷新" : status.message())
+                .build();
+    }
+
+    private KugouAccountStatusResponse validateStoredAccount(UserMusicAccount account) {
+        if (!Boolean.TRUE.equals(account.getIsActive()) || !StringUtils.hasText(account.getAuthToken())) {
+            return invalid("未授权");
+        }
+
+        String token = account.getAuthToken();
+        String kgUserId = account.getRefreshToken();
+        String nickname = null;
+
+        if (StringUtils.hasText(kgUserId)) {
+            JSONObject json = get(baseUrl() + "/login/token?token=" + encode(token) + "&userid=" + encode(kgUserId))
+                    .orElse(null);
+            log.info("[KugouAuth] status userId={} storedUserId={} response={}",
+                    account.getUserId(), kgUserId, toLogString(json));
+            if (json != null) {
+                String refreshedToken = firstNonBlank(json, "token", "data.token");
+                String refreshedUserId = firstNonBlank(json, "userid", "userId", "uid", "data.userid", "data.userId");
+                nickname = firstNonBlank(json, "nickname", "data.nickname", "data.uname", "data.username");
+                if (StringUtils.hasText(refreshedToken)) {
+                    account.setAuthToken(refreshedToken);
+                }
+                if (StringUtils.hasText(refreshedUserId)) {
+                    account.setRefreshToken(refreshedUserId);
+                }
+                accountRepository.save(account);
+            }
+        }
+
+        return KugouAccountStatusResponse.builder()
+                .valid(true)
+                .nickname(nickname)
+                .message("已授权")
                 .build();
     }
 
