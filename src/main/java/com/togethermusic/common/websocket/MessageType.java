@@ -34,5 +34,7 @@ public enum MessageType {
     /** 用户黑名单 */
     BLACKLIST,
     /** 被踢出通知 */
-    KICK
+    KICK,
+    /** 房间 Token 授权状态 */
+    TOKEN_STATUS
 }
