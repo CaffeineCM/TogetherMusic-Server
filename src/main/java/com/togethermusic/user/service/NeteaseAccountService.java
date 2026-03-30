@@ -490,11 +490,11 @@ public class NeteaseAccountService {
                 continue;
             }
 
-            if (userId.equals(house.getTokenHolderUserId())) {
+            if (userId.equals(house.getTokenHolderUserId("wy"))) {
                 continue;
             }
 
-            house.setTokenHolderUserId(userId);
+            house.setTokenHolderUserId("wy", userId);
             roomRepository.save(house);
             log.info("[NeteaseAuth] Synced room {} token holder to user {}", house.getId(), userId);
         }

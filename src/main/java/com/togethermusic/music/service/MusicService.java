@@ -490,7 +490,7 @@ public class MusicService {
 
     public MusicDiscoveryContext getDiscoveryContext(String houseId, Long currentUserId, String source) {
         boolean canViewHostPlaylists = supportsUserPlaylists(source)
-                && adapterRouter.getTokenHolderInfo(houseId)
+                && adapterRouter.getTokenHolderInfo(houseId, source)
                 .map(info -> currentUserId != null && info.isTokenHolder(currentUserId))
                 .orElse(false);
         return MusicDiscoveryContext.builder()
@@ -508,7 +508,7 @@ public class MusicService {
             return List.of();
         }
 
-        var holderInfo = adapterRouter.getTokenHolderInfo(houseId)
+        var holderInfo = adapterRouter.getTokenHolderInfo(houseId, source)
                 .orElseThrow(() -> new BusinessException(ErrorCode.FORBIDDEN, "当前房间未配置房主音乐账号"));
 
         if (currentUserId == null || !holderInfo.isTokenHolder(currentUserId)) {
