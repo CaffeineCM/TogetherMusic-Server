@@ -3,8 +3,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SERVICE_DIR="$ROOT_DIR/music-services/kugou-api"
-RUNTIME_DIR="$ROOT_DIR/music-services/runtime"
+cd "$ROOT_DIR"
+
+SERVICE_DIR="music-services/kugou-api"
+RUNTIME_DIR="music-services/runtime"
 PID_FILE="$RUNTIME_DIR/kugou-api.pid"
 LOG_FILE="$RUNTIME_DIR/kugou-api.log"
 PORT="${KUGOU_API_PORT:-3400}"
@@ -19,6 +21,11 @@ if [[ ! -d "$SERVICE_DIR" ]]; then
 fi
 
 if [[ ! -f "$ENV_FILE" ]]; then
+  if [[ ! -f "$SERVICE_DIR/.env.example" ]]; then
+    echo "KuGou API env template not found: $SERVICE_DIR/.env.example" >&2
+    echo "Please make sure music-services/kugou-api has been pulled to this server." >&2
+    exit 1
+  fi
   cp "$SERVICE_DIR/.env.example" "$ENV_FILE"
   perl -0pi -e "s/platform=''/platform='lite'/" "$ENV_FILE"
 fi

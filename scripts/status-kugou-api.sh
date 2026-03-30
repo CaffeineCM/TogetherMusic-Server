@@ -3,8 +3,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PID_FILE="$ROOT_DIR/music-services/runtime/kugou-api.pid"
-LOG_FILE="$ROOT_DIR/music-services/runtime/kugou-api.log"
+cd "$ROOT_DIR"
+
+PID_FILE="music-services/runtime/kugou-api.pid"
+LOG_FILE="music-services/runtime/kugou-api.log"
 PORT="${KUGOU_API_PORT:-3400}"
 
 PID="$(lsof -tiTCP:"$PORT" -sTCP:LISTEN | head -n 1 || true)"
