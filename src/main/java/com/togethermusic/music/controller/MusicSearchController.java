@@ -59,33 +59,46 @@ public class MusicSearchController {
     }
 
     @GetMapping("/discovery/context")
-    public Response<MusicDiscoveryContext> discoveryContext(@RequestParam String houseId) {
+    public Response<MusicDiscoveryContext> discoveryContext(
+            @RequestParam String houseId,
+            @RequestParam(defaultValue = "wy") String source
+    ) {
         Long currentUserId = StpUtil.isLogin() ? StpUtil.getLoginIdAsLong() : null;
-        return Response.success(musicService.getDiscoveryContext(houseId, currentUserId));
+        return Response.success(musicService.getDiscoveryContext(houseId, currentUserId, source));
     }
 
     @GetMapping("/playlists/recommended")
-    public Response<java.util.List<MusicPlaylistSummary>> recommendedPlaylists(@RequestParam String houseId) {
-        return Response.success(musicService.getRecommendedPlaylists(houseId));
+    public Response<java.util.List<MusicPlaylistSummary>> recommendedPlaylists(
+            @RequestParam String houseId,
+            @RequestParam(defaultValue = "wy") String source
+    ) {
+        return Response.success(musicService.getRecommendedPlaylists(houseId, source));
     }
 
     @GetMapping("/playlists/host-favorites")
-    public Response<java.util.List<MusicPlaylistSummary>> hostPlaylists(@RequestParam String houseId) {
+    public Response<java.util.List<MusicPlaylistSummary>> hostPlaylists(
+            @RequestParam String houseId,
+            @RequestParam(defaultValue = "wy") String source
+    ) {
         Long currentUserId = StpUtil.isLogin() ? StpUtil.getLoginIdAsLong() : null;
-        return Response.success(musicService.getHostPlaylists(houseId, currentUserId));
+        return Response.success(musicService.getHostPlaylists(houseId, currentUserId, source));
     }
 
     @GetMapping("/playlists/{playlistId}")
     public Response<java.util.List<Music>> playlistDetail(
             @PathVariable String playlistId,
-            @RequestParam String houseId
+            @RequestParam String houseId,
+            @RequestParam(defaultValue = "wy") String source
     ) {
-        return Response.success(musicService.getPlaylistDetail(houseId, playlistId));
+        return Response.success(musicService.getPlaylistDetail(houseId, playlistId, source));
     }
 
     @GetMapping("/toplists")
-    public Response<java.util.List<MusicToplistSummary>> toplists(@RequestParam String houseId) {
-        return Response.success(musicService.getToplists(houseId));
+    public Response<java.util.List<MusicToplistSummary>> toplists(
+            @RequestParam String houseId,
+            @RequestParam(defaultValue = "wy") String source
+    ) {
+        return Response.success(musicService.getToplists(houseId, source));
     }
 
     @GetMapping("/image")

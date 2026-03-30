@@ -482,21 +482,26 @@ public class MusicService {
                 .toList();
     }
 
-    public MusicDiscoveryContext getDiscoveryContext(String houseId, Long currentUserId) {
-        boolean canViewHostPlaylists = adapterRouter.getTokenHolderInfo(houseId)
+    public MusicDiscoveryContext getDiscoveryContext(String houseId, Long currentUserId, String source) {
+        boolean canViewHostPlaylists = supportsUserPlaylists(source)
+                && adapterRouter.getTokenHolderInfo(houseId)
                 .map(info -> currentUserId != null && info.isTokenHolder(currentUserId))
                 .orElse(false);
         return MusicDiscoveryContext.builder()
                 .canViewHostPlaylists(canViewHostPlaylists)
-                .playlistSource("wy")
+                .playlistSource(source)
                 .build();
     }
 
-    public List<MusicPlaylistSummary> getRecommendedPlaylists(String houseId) {
-        return adapterRouter.getAdapterForRoom(houseId, "wy").getRecommendedPlaylists();
+    public List<MusicPlaylistSummary> getRecommendedPlaylists(String houseId, String source) {
+        return adapterRouter.getAdapterForRoom(houseId, source).getRecommendedPlaylists();
     }
 
-    public List<MusicPlaylistSummary> getHostPlaylists(String houseId, Long currentUserId) {
+    public List<MusicPlaylistSummary> getHostPlaylists(String houseId, Long currentUserId, String source) {
+        if (!supportsUserPlaylists(source)) {
+            return List.of();
+        }
+
         var holderInfo = adapterRouter.getTokenHolderInfo(houseId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.FORBIDDEN, "当前房间未配置房主音乐账号"));
 
@@ -504,16 +509,16 @@ public class MusicService {
             throw new BusinessException(ErrorCode.FORBIDDEN, "只有当前房间的 Token 持有者可以查看收藏歌单");
         }
 
-        var adapterContext = adapterRouter.getAdapterForRoom(houseId, "wy");
+        var adapterContext = adapterRouter.getAdapterForRoom(houseId, source);
         return adapterContext.getUserPlaylists();
     }
 
-    public List<Music> getPlaylistDetail(String houseId, String playlistId) {
-        return adapterRouter.getAdapterForRoom(houseId, "wy").getPlaylist(playlistId);
+    public List<Music> getPlaylistDetail(String houseId, String playlistId, String source) {
+        return adapterRouter.getAdapterForRoom(houseId, source).getPlaylist(playlistId);
     }
 
-    public List<MusicToplistSummary> getToplists(String houseId) {
-        return adapterRouter.getAdapterForRoom(houseId, "wy").getToplists();
+    public List<MusicToplistSummary> getToplists(String houseId, String source) {
+        return adapterRouter.getAdapterForRoom(houseId, source).getToplists();
     }
 
     public String getBlackMusicList(String houseId) {
@@ -562,6 +567,10 @@ public class MusicService {
                         .thenComparingLong((Music m) -> m.getLikeTime() != null ? m.getLikeTime() : 0L).reversed()
                         .thenComparingLong(Music::getPickTime))
                 .toList();
+    }
+
+    private boolean supportsUserPlaylists(String source) {
+        return "wy".equalsIgnoreCase(source);
     }
 
     private long resolvePosition(Music music, String status, long storedPosition, long updatedAt, long now) {

@@ -3,6 +3,8 @@ package com.togethermusic.music.adapter;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.togethermusic.config.TogetherMusicProperties;
+import com.togethermusic.music.dto.MusicPlaylistSummary;
+import com.togethermusic.music.dto.MusicToplistSummary;
 import com.togethermusic.music.model.Music;
 import kong.unirest.HttpResponse;
 import kong.unirest.Unirest;
@@ -12,6 +14,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -82,7 +85,7 @@ public class KuGouAdapter extends AbstractMusicAdapter {
         List<Music> result = new ArrayList<>();
 
         getWithRetry(
-                baseUrl + "/search?keyword=" + encode(keyword) + "&page=1&pagesize=12",
+                baseUrl + "/search?keyword=" + encode(keyword) + "&page=1&pagesize=30",
                 userToken,
                 json -> {
                     if (!Integer.valueOf(1).equals(json.getInteger("status"))) return null;
@@ -138,9 +141,88 @@ public class KuGouAdapter extends AbstractMusicAdapter {
 
     @Override
     public List<Music> getPlaylist(String playlistId, String userToken) {
-        // 酷狗歌单暂不支持，返回空列表
-        log.info("[kg] Playlist fetch not supported yet for id={}", playlistId);
-        return new ArrayList<>();
+        String baseUrl = properties.getMusicApi().getKugou();
+        List<Music> result = new ArrayList<>();
+
+        getWithRetry(baseUrl + "/playlist/detail?id=" + encode(playlistId), userToken, json -> {
+            JSONObject data = firstObject(json, "data", "playlist");
+            JSONArray tracks = firstArray(data, "songs", "list", "tracks");
+            if (tracks == null) {
+                tracks = firstArray(json, "songs", "list", "tracks", "data");
+            }
+            if (tracks == null) return null;
+
+            for (int i = 0; i < tracks.size(); i++) {
+                Music music = buildFromPlaylistItem(tracks.getJSONObject(i));
+                if (music != null) {
+                    result.add(music);
+                }
+            }
+            return result;
+        });
+
+        return result;
+    }
+
+    @Override
+    public List<MusicPlaylistSummary> getRecommendedPlaylists(String userToken) {
+        String baseUrl = properties.getMusicApi().getKugou();
+        List<MusicPlaylistSummary> result = new ArrayList<>();
+
+        List<String> candidateUrls = List.of(
+                baseUrl + "/playlist/list?page=1&pagesize=24",
+                baseUrl + "/playlist/index?page=1&pagesize=24",
+                baseUrl + "/top/card"
+        );
+
+        for (String url : candidateUrls) {
+            if (loadPlaylistSummaries(url, userToken, result)) {
+                break;
+            }
+        }
+
+        return result;
+    }
+
+    @Override
+    public List<MusicToplistSummary> getToplists(String userToken) {
+        String baseUrl = properties.getMusicApi().getKugou();
+        List<MusicToplistSummary> result = new ArrayList<>();
+
+        getWithRetry(baseUrl + "/top/card", userToken, json -> {
+            JSONArray cards = firstArray(json, "data", "list");
+            if (cards == null) {
+                cards = firstArray(firstObject(json, "data"), "cards", "list");
+            }
+            if (cards == null) return null;
+
+            for (int i = 0; i < cards.size(); i++) {
+                JSONObject item = cards.getJSONObject(i);
+                MusicToplistSummary summary = parseToplistSummary(item);
+                if (summary != null) {
+                    result.add(summary);
+                }
+            }
+            return result;
+        });
+
+        return result;
+    }
+
+    @Override
+    public boolean validateToken(String userToken) {
+        return fetchAccountProfile(userToken).isPresent();
+    }
+
+    public Optional<String> getNickname(String userToken) {
+        return fetchAccountProfile(userToken).map(profile -> profile.getString("nickname"))
+                .filter(name -> name != null && !name.isBlank());
+    }
+
+    public Optional<String> getUserId(String userToken) {
+        return fetchAccountProfile(userToken)
+                .map(profile -> firstNonBlank(profile, "userid", "user_id", "uid"))
+                .filter(id -> id != null && !id.isBlank());
     }
 
     private Music buildFromSearchItem(JSONObject item, String quality) {
@@ -165,6 +247,47 @@ public class KuGouAdapter extends AbstractMusicAdapter {
         String imgUrl = item.getString("Image");
         if (imgUrl != null) {
             music.setPictureUrl(imgUrl.replace("{size}", "240"));
+        }
+
+        return music;
+    }
+
+    private Music buildFromPlaylistItem(JSONObject item) {
+        if (item == null) {
+            return null;
+        }
+
+        String hash = firstNonBlank(item,
+                "hash", "audio_id", "audioid", "FileHash", "EMixSongID");
+        if (hash == null) {
+            return null;
+        }
+
+        Music music = new Music();
+        music.setSource("kg");
+        music.setId(hash);
+        music.setQuality("320k");
+        music.setName(firstNonBlank(item, "songname", "song_name", "name"));
+        music.setArtist(firstNonBlank(item, "singername", "author_name", "artist", "filename"));
+        music.setDuration(readDurationMs(item));
+        music.setPictureUrl(firstNonBlank(item, "img", "image", "cover"));
+        music.setMediaMid(firstNonBlank(item, "album_id", "albumid"));
+
+        if ((music.getArtist() == null || music.getArtist().isBlank())
+                && item.getString("filename") != null
+                && item.getString("filename").contains(" - ")) {
+            String[] parts = item.getString("filename").split(" - ", 2);
+            music.setArtist(parts[0].trim());
+            if (music.getName() == null || music.getName().isBlank()) {
+                music.setName(parts[1].trim());
+            }
+        }
+
+        if (music.getName() == null || music.getName().isBlank()) {
+            music.setName("未知歌曲");
+        }
+        if (music.getArtist() == null || music.getArtist().isBlank()) {
+            music.setArtist("未知艺术家");
         }
 
         return music;
@@ -214,5 +337,157 @@ public class KuGouAdapter extends AbstractMusicAdapter {
         } catch (Exception e) {
             return s;
         }
+    }
+
+    private Optional<JSONObject> fetchAccountProfile(String userToken) {
+        if (userToken == null || userToken.isBlank()) {
+            return Optional.empty();
+        }
+        String baseUrl = properties.getMusicApi().getKugou();
+        return getWithRetry(baseUrl + "/user/detail", userToken, json -> {
+            JSONObject data = firstObject(json, "data", "user");
+            return data != null ? data : null;
+        });
+    }
+
+    private boolean loadPlaylistSummaries(String url, String userToken, List<MusicPlaylistSummary> result) {
+        return getWithRetry(url, userToken, json -> {
+            JSONArray items = firstArray(json, "data", "list");
+            if (items == null) {
+                JSONObject data = firstObject(json, "data");
+                items = firstArray(data, "info", "cards", "list", "playlists");
+            }
+            if (items == null) return null;
+
+            for (int i = 0; i < items.size(); i++) {
+                MusicPlaylistSummary summary = parsePlaylistSummary(items.getJSONObject(i));
+                if (summary != null) {
+                    result.add(summary);
+                }
+            }
+            return result.isEmpty() ? null : Boolean.TRUE;
+        }).orElse(false);
+    }
+
+    private MusicPlaylistSummary parsePlaylistSummary(JSONObject item) {
+        if (item == null) {
+            return null;
+        }
+
+        String id = firstNonBlank(item, "id", "specialid", "global_collection_id", "playlist_id");
+        String name = firstNonBlank(item, "name", "specialname", "title");
+        if (id == null || name == null) {
+            return null;
+        }
+
+        return MusicPlaylistSummary.builder()
+                .id(id)
+                .name(name)
+                .coverUrl(firstNonBlank(item, "imgurl", "cover", "pic", "image"))
+                .creatorName(firstNonBlank(item, "nickname", "username", "author_name"))
+                .trackCount(readLong(item, "songcount", "trackCount", "count"))
+                .playCount(readLong(item, "play_count", "playCount", "heat"))
+                .description(firstNonBlank(item, "intro", "description"))
+                .source("kg")
+                .build();
+    }
+
+    private MusicToplistSummary parseToplistSummary(JSONObject item) {
+        if (item == null) {
+            return null;
+        }
+
+        String id = firstNonBlank(item, "id", "rankid", "specialid", "global_collection_id");
+        String name = firstNonBlank(item, "name", "title", "specialname");
+        if (id == null || name == null) {
+            return null;
+        }
+
+        return MusicToplistSummary.builder()
+                .id(id)
+                .name(name)
+                .coverUrl(firstNonBlank(item, "imgurl", "cover", "pic", "image"))
+                .description(firstNonBlank(item, "intro", "description"))
+                .updateFrequency(firstNonBlank(item, "update_frequency", "updateFrequency"))
+                .source("kg")
+                .build();
+    }
+
+    private JSONObject firstObject(JSONObject source, String... keys) {
+        if (source == null) {
+            return null;
+        }
+        JSONObject current = source;
+        for (String key : keys) {
+            if (current == null) {
+                return null;
+            }
+            Object value = current.get(key);
+            if (value instanceof JSONObject next) {
+                current = next;
+            } else {
+                return null;
+            }
+        }
+        return current;
+    }
+
+    private JSONArray firstArray(JSONObject source, String... keys) {
+        if (source == null) {
+            return null;
+        }
+        for (String key : keys) {
+            Object value = source.get(key);
+            if (value instanceof JSONArray array) {
+                return array;
+            }
+            if (value instanceof JSONObject object) {
+                JSONArray nested = firstArray(object, "list", "data", "items");
+                if (nested != null) {
+                    return nested;
+                }
+            }
+        }
+        return null;
+    }
+
+    private String firstNonBlank(JSONObject object, String... keys) {
+        if (object == null) {
+            return null;
+        }
+        for (String key : keys) {
+            String value = object.getString(key);
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private Long readLong(JSONObject object, String... keys) {
+        if (object == null) {
+            return null;
+        }
+        for (String key : keys) {
+            Object value = object.get(key);
+            if (value instanceof Number number) {
+                return number.longValue();
+            }
+            if (value instanceof String text && !text.isBlank()) {
+                try {
+                    return Long.parseLong(text);
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        }
+        return null;
+    }
+
+    private long readDurationMs(JSONObject object) {
+        Long duration = readLong(object, "duration", "Duration", "timelength");
+        if (duration == null) {
+            return 0L;
+        }
+        return duration > 1000 ? duration : duration * 1000;
     }
 }

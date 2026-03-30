@@ -4,12 +4,16 @@ import cn.dev33.satoken.annotation.SaCheckLogin;
 import cn.dev33.satoken.stp.StpUtil;
 import com.togethermusic.common.response.Response;
 import com.togethermusic.user.dto.BindMusicAccountRequest;
+import com.togethermusic.user.dto.KugouAccountStatusResponse;
+import com.togethermusic.user.dto.KugouQrLoginCheckResponse;
+import com.togethermusic.user.dto.KugouQrLoginStartResponse;
 import com.togethermusic.user.dto.MusicAccountVO;
 import com.togethermusic.user.dto.NeteaseAccountStatusResponse;
 import com.togethermusic.user.dto.NeteaseQrLoginCheckResponse;
 import com.togethermusic.user.dto.NeteaseQrLoginStartResponse;
 import com.togethermusic.user.entity.UserMusicAccount;
 import com.togethermusic.user.repository.UserMusicAccountRepository;
+import com.togethermusic.user.service.KugouAccountService;
 import com.togethermusic.user.service.NeteaseAccountService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -32,6 +36,7 @@ public class UserMusicAccountController {
 
     private final UserMusicAccountRepository accountRepository;
     private final NeteaseAccountService neteaseAccountService;
+    private final KugouAccountService kugouAccountService;
 
     /**
      * 绑定音乐平台账号
@@ -114,6 +119,10 @@ public class UserMusicAccountController {
 
         if ("netease".equalsIgnoreCase(source)) {
             boolean valid = neteaseAccountService.validateCurrentUser(userId).isValid();
+            return Response.success(valid);
+        }
+        if ("kugou".equalsIgnoreCase(source)) {
+            boolean valid = kugouAccountService.validateCurrentUser(userId).valid();
             return Response.success(valid);
         }
 
@@ -199,6 +208,52 @@ public class UserMusicAccountController {
     public Response<NeteaseAccountStatusResponse> getNeteaseAccountStatus() {
         Long userId = StpUtil.getLoginIdAsLong();
         return Response.success(neteaseAccountService.validateCurrentUser(userId));
+    }
+
+    @PostMapping("/kugou/token/import")
+    public Response<KugouAccountStatusResponse> importKugouToken(
+            @RequestBody Map<String, String> body) {
+        Long userId = StpUtil.getLoginIdAsLong();
+        String token = body.get("token");
+        return Response.success(kugouAccountService.importToken(userId, token));
+    }
+
+    @PostMapping("/kugou/qr/start")
+    public Response<KugouQrLoginStartResponse> startKugouQrLogin() {
+        return Response.success(kugouAccountService.startQrLogin());
+    }
+
+    @GetMapping("/kugou/qr/check")
+    public Response<KugouQrLoginCheckResponse> checkKugouQrLogin(@RequestParam String key) {
+        Long userId = StpUtil.getLoginIdAsLong();
+        return Response.success(kugouAccountService.checkQrLogin(userId, key));
+    }
+
+    @PostMapping("/kugou/captcha/send")
+    public Response<Boolean> sendKugouCaptcha(@RequestBody Map<String, String> body) {
+        String phone = body.get("phone");
+        return Response.success(kugouAccountService.sendCaptcha(phone));
+    }
+
+    @PostMapping("/kugou/captcha/login")
+    public Response<KugouAccountStatusResponse> loginKugouByCaptcha(
+            @RequestBody Map<String, String> body) {
+        Long userId = StpUtil.getLoginIdAsLong();
+        String phone = body.get("phone");
+        String captcha = body.get("captcha");
+        return Response.success(kugouAccountService.loginByCaptcha(userId, phone, captcha));
+    }
+
+    @PostMapping("/kugou/refresh")
+    public Response<KugouAccountStatusResponse> refreshKugouAccount() {
+        Long userId = StpUtil.getLoginIdAsLong();
+        return Response.success(kugouAccountService.refreshCurrentUser(userId));
+    }
+
+    @GetMapping("/kugou/status")
+    public Response<KugouAccountStatusResponse> getKugouAccountStatus() {
+        Long userId = StpUtil.getLoginIdAsLong();
+        return Response.success(kugouAccountService.validateCurrentUser(userId));
     }
 
     private MusicAccountVO toVO(UserMusicAccount account) {
