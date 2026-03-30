@@ -4,6 +4,7 @@ import com.alibaba.fastjson2.JSONObject;
 import com.togethermusic.config.TogetherMusicProperties;
 import com.togethermusic.music.adapter.KuGouAdapter;
 import com.togethermusic.user.dto.KugouAccountStatusResponse;
+import com.togethermusic.user.dto.KugouCaptchaSendResponse;
 import com.togethermusic.user.dto.KugouQrLoginCheckResponse;
 import com.togethermusic.user.dto.KugouQrLoginStartResponse;
 import com.togethermusic.user.entity.UserMusicAccount;
@@ -35,18 +36,28 @@ public class KugouAccountService {
         return persistAuthorizedAccount(userId, normalized, null, "酷狗授权成功");
     }
 
-    public Boolean sendCaptcha(String mobile) {
+    public KugouCaptchaSendResponse sendCaptcha(String mobile) {
         if (!StringUtils.hasText(mobile)) {
-            return false;
+            return KugouCaptchaSendResponse.builder()
+                    .success(false)
+                    .message("手机号不能为空")
+                    .build();
         }
 
         JSONObject json = get(baseUrl() + "/captcha/sent?mobile=" + encode(mobile)).orElse(null);
         if (json == null) {
-            return false;
+            return KugouCaptchaSendResponse.builder()
+                    .success(false)
+                    .message("酷狗验证码接口无响应")
+                    .build();
         }
         Integer status = json.getInteger("status");
         Integer code = json.getInteger("code");
-        return Integer.valueOf(1).equals(status) || Integer.valueOf(200).equals(code);
+        boolean success = Integer.valueOf(1).equals(status) || Integer.valueOf(200).equals(code);
+        return KugouCaptchaSendResponse.builder()
+                .success(success)
+                .message(extractMessage(json, success ? "验证码已发送" : "验证码发送失败"))
+                .build();
     }
 
     public KugouAccountStatusResponse loginByCaptcha(Long userId, String mobile, String captcha) {

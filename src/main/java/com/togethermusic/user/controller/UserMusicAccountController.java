@@ -5,6 +5,7 @@ import cn.dev33.satoken.stp.StpUtil;
 import com.togethermusic.common.response.Response;
 import com.togethermusic.user.dto.BindMusicAccountRequest;
 import com.togethermusic.user.dto.KugouAccountStatusResponse;
+import com.togethermusic.user.dto.KugouCaptchaSendResponse;
 import com.togethermusic.user.dto.KugouQrLoginCheckResponse;
 import com.togethermusic.user.dto.KugouQrLoginStartResponse;
 import com.togethermusic.user.dto.MusicAccountVO;
@@ -230,7 +231,7 @@ public class UserMusicAccountController {
     }
 
     @PostMapping("/kugou/captcha/send")
-    public Response<Boolean> sendKugouCaptcha(@RequestBody Map<String, String> body) {
+    public Response<KugouCaptchaSendResponse> sendKugouCaptcha(@RequestBody Map<String, String> body) {
         String phone = body.get("phone");
         return Response.success(kugouAccountService.sendCaptcha(phone));
     }
