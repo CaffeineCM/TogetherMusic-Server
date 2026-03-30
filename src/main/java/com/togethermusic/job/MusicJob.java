@@ -195,11 +195,12 @@ public class MusicJob {
      */
     private void refreshUrlIfExpired(String houseId, Music music) {
         long expireTime = properties.getMusic().getExpireTime();
+        boolean missingUrl = music.getUrl() == null || music.getUrl().isBlank();
         boolean expired = music.getUrlExpireTime() != null
                 ? System.currentTimeMillis() >= music.getUrlExpireTime()
                 : (System.currentTimeMillis() - music.getPickTime()) >= expireTime;
 
-        if (!expired) return;
+        if (!missingUrl && !expired) return;
 
         try {
             // 使用房间感知的适配器路由刷新 URL
@@ -207,6 +208,10 @@ public class MusicJob {
             Music refreshed = adapterContext.getById(music.getId(), music.getQuality());
             if (refreshed != null && refreshed.getUrl() != null) {
                 music.setUrl(refreshed.getUrl());
+                music.setUrlExpireTime(refreshed.getUrlExpireTime());
+                if (refreshed.getLyric() != null && !refreshed.getLyric().isBlank()) {
+                    music.setLyric(refreshed.getLyric());
+                }
                 music.setPickTime(System.currentTimeMillis());
                 log.info("[{}] Refreshed URL for: {}", houseId, music.getName());
             }

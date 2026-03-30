@@ -30,7 +30,7 @@ public class TogetherMusicProperties {
     public static class Music {
         private float voteRate = 0.3f;
         private long expireTime = 1200000L;
-        private int playlistSize = 30;
+        private int playlistSize = 100;
     }
 
     @Data

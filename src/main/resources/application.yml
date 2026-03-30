@@ -5,9 +5,9 @@ spring:
   application:
     name: together-music
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/together_music}
-    username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:}
+    url: jdbc:postgresql://192.168.5.220:6432/together_music
+    username: xwf
+    password: xwf980521
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
@@ -61,7 +61,7 @@ together-music:
   music:
     vote-rate: 0.3
     expire-time: 1200000
-    playlist-size: 30
+    playlist-size: 100
   music-api:
     netease: ${NETEASE_API_BASE_URL:http://localhost:3000}
     qq: ${QQ_MUSIC_API_BASE_URL:http://localhost:3300}
