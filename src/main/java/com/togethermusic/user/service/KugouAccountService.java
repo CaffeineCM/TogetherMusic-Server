@@ -12,12 +12,14 @@ import com.togethermusic.user.repository.UserMusicAccountRepository;
 import kong.unirest.HttpResponse;
 import kong.unirest.Unirest;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.Map;
 import java.util.Optional;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class KugouAccountService {
@@ -45,6 +47,7 @@ public class KugouAccountService {
         }
 
         JSONObject json = get(baseUrl() + "/captcha/sent?mobile=" + encode(mobile)).orElse(null);
+        log.info("[KugouAuth] captcha/send mobile={} response={}", maskPhone(mobile), toLogString(json));
         if (json == null) {
             return KugouCaptchaSendResponse.builder()
                     .success(false)
@@ -67,6 +70,8 @@ public class KugouAccountService {
 
         JSONObject json = get(baseUrl() + "/login/cellphone?mobile=" + encode(mobile) + "&code=" + encode(captcha))
                 .orElse(null);
+        log.info("[KugouAuth] captcha/login userId={} mobile={} response={}",
+                userId, maskPhone(mobile), toLogString(json));
         if (json == null) {
             return invalid("酷狗登录失败");
         }
@@ -89,16 +94,19 @@ public class KugouAccountService {
 
     public KugouQrLoginStartResponse startQrLogin() {
         JSONObject keyJson = get(baseUrl() + "/login/qr/key?timestamp=" + System.currentTimeMillis()).orElse(null);
+        log.info("[KugouAuth] qr/start key response={}", toLogString(keyJson));
         String key = firstNonBlank(keyJson, "key", "data.key", "codekey", "data.codekey", "qrcode", "data.qrcode");
 
         JSONObject qrJson = null;
         if (StringUtils.hasText(key)) {
             qrJson = get(baseUrl() + "/login/qr/create?key=" + encode(key) + "&qrimg=true&timestamp="
                     + System.currentTimeMillis()).orElse(null);
+            log.info("[KugouAuth] qr/start create-with-key key={} response={}", key, toLogString(qrJson));
         }
         if (qrJson == null) {
             qrJson = get(baseUrl() + "/login/qr/create?qrimg=true&timestamp="
                     + System.currentTimeMillis()).orElse(null);
+            log.info("[KugouAuth] qr/start create-without-key response={}", toLogString(qrJson));
         }
 
         String effectiveKey = StringUtils.hasText(key)
@@ -130,6 +138,7 @@ public class KugouAccountService {
     public KugouQrLoginCheckResponse checkQrLogin(Long userId, String key) {
         JSONObject json = get(baseUrl() + "/login/qr/check?key=" + encode(key) + "&timestamp="
                 + System.currentTimeMillis()).orElse(null);
+        log.info("[KugouAuth] qr/check userId={} key={} response={}", userId, key, toLogString(json));
         if (json == null) {
             return KugouQrLoginCheckResponse.builder()
                     .code(-1)
@@ -138,22 +147,29 @@ public class KugouAccountService {
                     .build();
         }
 
-        int code = Optional.ofNullable(json.getInteger("code")).orElse(-1);
+        int code = firstInt(json, "code", "status", "data.code", "data.status");
         String message = extractMessage(json, "等待扫码");
         boolean authorized = false;
         String nickname = null;
+        String token = firstNonBlank(json, "token", "data.token", "data.info.token");
+        String kgUserId = firstNonBlank(
+                json,
+                "userid",
+                "userId",
+                "uid",
+                "data.userid",
+                "data.userId",
+                "data.uid",
+                "data.info.userid"
+        );
 
-        if (code == 4) {
-            String token = firstNonBlank(json, "token", "data.token");
-            String kgUserId = firstNonBlank(firstObject(json, "data"), "userid", "userId", "uid");
-            if (StringUtils.hasText(token)) {
-                KugouAccountStatusResponse status = persistAuthorizedAccount(userId, token, kgUserId, "酷狗授权成功");
-                authorized = status.valid();
-                nickname = status.nickname();
-                message = status.message();
-            } else {
-                message = "二维码已确认，但未返回 token";
-            }
+        if (StringUtils.hasText(token)) {
+            KugouAccountStatusResponse status = persistAuthorizedAccount(userId, token, kgUserId, "酷狗授权成功");
+            authorized = status.valid();
+            nickname = status.nickname();
+            message = status.message();
+        } else if (code == 4) {
+            message = "二维码已确认，但未返回 token";
         }
 
         return KugouQrLoginCheckResponse.builder()
@@ -188,6 +204,8 @@ public class KugouAccountService {
             url.append("&userid=").append(encode(kgUserId));
         }
         JSONObject json = get(url.toString()).orElse(null);
+        log.info("[KugouAuth] refresh userId={} storedUserId={} response={}",
+                account.getUserId(), kgUserId, toLogString(json));
         if (json == null) {
             return buildStatus(token);
         }
@@ -268,6 +286,21 @@ public class KugouAccountService {
         return Optional.empty();
     }
 
+    private String toLogString(JSONObject json) {
+        if (json == null) {
+            return "null";
+        }
+        String text = json.toJSONString();
+        return text.length() > 1200 ? text.substring(0, 1200) + "...<truncated>" : text;
+    }
+
+    private String maskPhone(String mobile) {
+        if (!StringUtils.hasText(mobile) || mobile.length() < 7) {
+            return mobile;
+        }
+        return mobile.substring(0, 3) + "****" + mobile.substring(mobile.length() - 4);
+    }
+
     private String extractMessage(JSONObject json, String fallback) {
         String message = firstNonBlank(json, "message", "msg");
         if (StringUtils.hasText(message)) {
@@ -319,5 +352,31 @@ public class KugouAccountService {
             }
         }
         return null;
+    }
+
+    private int firstInt(JSONObject source, String... paths) {
+        if (source == null) {
+            return -1;
+        }
+        for (String path : paths) {
+            Object current = source;
+            for (String key : path.split("\\.")) {
+                if (!(current instanceof JSONObject object)) {
+                    current = null;
+                    break;
+                }
+                current = object.get(key);
+            }
+            if (current instanceof Number number) {
+                return number.intValue();
+            }
+            if (current instanceof String text && StringUtils.hasText(text)) {
+                try {
+                    return Integer.parseInt(text);
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        }
+        return -1;
     }
 }
