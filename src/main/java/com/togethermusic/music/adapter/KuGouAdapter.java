@@ -6,16 +6,16 @@ import com.togethermusic.config.TogetherMusicProperties;
 import com.togethermusic.music.dto.MusicPlaylistSummary;
 import com.togethermusic.music.dto.MusicToplistSummary;
 import com.togethermusic.music.model.Music;
-import kong.unirest.HttpResponse;
-import kong.unirest.Unirest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * 酷狗音乐适配器
@@ -79,22 +79,28 @@ public class KuGouAdapter extends AbstractMusicAdapter {
     @Override
     public Music getById(String id, String quality, String userToken) {
         String baseUrl = properties.getMusicApi().getKugou();
-        Optional<Music> musicOpt = getWithRetry(
+        Optional<JSONObject> audioItemOpt = getWithRetry(
                 baseUrl + "/audio?hash=" + id,
                 userToken,
-                json -> buildFromAudioResponse(json, id, quality)
+                this::extractAudioItem
         );
 
-        if (musicOpt.isEmpty()) {
+        if (audioItemOpt.isEmpty()) {
             log.warn("[kg] No detail found for hash={}", id);
             return null;
         }
-        Music music = musicOpt.get();
+        JSONObject audioItem = audioItemOpt.get();
+        Music music = buildFromAudioItem(audioItem, id, quality);
 
-        String albumId = music.getMediaMid();
-        String playUrl = fetchPlayUrl(baseUrl, id, albumId, quality, userToken);
+        String playUrl = fetchPlayUrl(
+                baseUrl,
+                buildPlayableHashCandidates(audioItem, id, quality),
+                music.getMediaMid(),
+                quality,
+                userToken
+        );
         if (playUrl == null || playUrl.isBlank()) {
-            log.warn("[kg] No playable URL for hash={}, albumId={}", id, albumId);
+            log.warn("[kg] No playable URL for hash={}, albumId={}", id, music.getMediaMid());
             return null;
         }
         music.setUrl(playUrl);
@@ -162,6 +168,7 @@ public class KuGouAdapter extends AbstractMusicAdapter {
                 userToken,
                 result
         );
+        enrichPlaylistTrackCounts(baseUrl, userToken, result);
 
         return result;
     }
@@ -311,12 +318,14 @@ public class KuGouAdapter extends AbstractMusicAdapter {
         return music;
     }
 
-    private Music buildFromAudioResponse(JSONObject json, String hash, String quality) {
+    private JSONObject extractAudioItem(JSONObject json) {
         if (!Integer.valueOf(1).equals(json.getInteger("status"))) {
             return null;
         }
+        return firstAudioItem(json);
+    }
 
-        JSONObject item = firstAudioItem(json);
+    private Music buildFromAudioItem(JSONObject item, String hash, String quality) {
         if (item == null) {
             return null;
         }
@@ -328,7 +337,7 @@ public class KuGouAdapter extends AbstractMusicAdapter {
         music.setName(firstNonBlank(item, "audio_name", "song_name", "name"));
         music.setArtist(firstNonBlank(item, "author_name", "singername", "author_name_original"));
         music.setDuration(readDurationMs(item));
-        music.setPictureUrl(firstNonBlank(item, "img", "image", "cover", "sizable_cover"));
+        music.setPictureUrl(normalizeImageUrl(firstNonBlank(item, "img", "image", "cover", "sizable_cover")));
         music.setLyric(firstNonBlank(item, "lyrics", "lyric"));
         music.setMediaMid(firstNonBlank(item, "album_id", "albumid", "AlbumID"));
 
@@ -374,19 +383,71 @@ public class KuGouAdapter extends AbstractMusicAdapter {
         return music;
     }
 
-    private String fetchPlayUrl(String baseUrl, String hash, String albumId, String quality, String userToken) {
-        String albumParam = albumId != null ? "&album_id=" + albumId : "";
+    private String fetchPlayUrl(String baseUrl, List<String> hashCandidates, String albumId, String quality, String userToken) {
+        for (String hash : hashCandidates) {
+            String playUrl = fetchPlayUrlLegacy(baseUrl, hash, albumId, quality, userToken);
+            if (playUrl != null && !playUrl.isBlank()) {
+                return playUrl;
+            }
+        }
+
+        for (String hash : hashCandidates) {
+            String playUrl = fetchPlayUrlNew(baseUrl, hash, quality, userToken);
+            if (playUrl != null && !playUrl.isBlank()) {
+                return playUrl;
+            }
+        }
+
+        return null;
+    }
+
+    private String fetchPlayUrlLegacy(String baseUrl, String hash, String albumId, String quality, String userToken) {
+        String albumParam = albumId != null && !albumId.isBlank() ? "&album_id=" + albumId : "";
         String url = baseUrl + "/song/url?hash=" + hash + albumParam + "&quality=" + qualityParam(quality);
 
         return getWithRetry(url, userToken, json -> {
             if (!Integer.valueOf(1).equals(json.getInteger("status"))) return null;
             JSONObject data = json.getJSONObject("data");
             if (data == null) return null;
-            // 尝试多个字段名
             String playUrl = data.getString("play_url");
             if (playUrl == null) playUrl = data.getString("url");
             return playUrl;
         }).orElse(null);
+    }
+
+    private String fetchPlayUrlNew(String baseUrl, String hash, String quality, String userToken) {
+        return getWithRetry(
+                baseUrl + "/song/url/new?hash=" + hash,
+                userToken,
+                json -> extractPlayUrlFromNewResponse(json, quality, hash)
+        ).orElse(null);
+    }
+
+    private List<String> buildPlayableHashCandidates(JSONObject item, String requestedHash, String quality) {
+        Set<String> candidates = new LinkedHashSet<>();
+
+        addIfPresent(candidates, requestedHash);
+        addIfPresent(candidates, firstNonBlank(item, "hash"));
+
+        String normalizedQuality = quality != null ? quality : "320k";
+        switch (normalizedQuality) {
+            case "flac" -> {
+                addIfPresent(candidates, firstNonBlank(item, "hash_flac"));
+                addIfPresent(candidates, firstNonBlank(item, "hash_high"));
+                addIfPresent(candidates, firstNonBlank(item, "hash_320"));
+            }
+            case "128k" -> addIfPresent(candidates, firstNonBlank(item, "hash_128"));
+            default -> {
+                addIfPresent(candidates, firstNonBlank(item, "hash_320"));
+                addIfPresent(candidates, firstNonBlank(item, "hash_high"));
+            }
+        }
+
+        addIfPresent(candidates, firstNonBlank(item, "hash_128"));
+        addIfPresent(candidates, firstNonBlank(item, "hash_flac"));
+        addIfPresent(candidates, firstNonBlank(item, "hash_high"));
+
+        return new ArrayList<>(candidates);
     }
 
     private String qualityParam(String quality) {
@@ -429,6 +490,45 @@ public class KuGouAdapter extends AbstractMusicAdapter {
             }
             return result.isEmpty() ? null : Boolean.TRUE;
         }).orElse(false);
+    }
+
+    private void enrichPlaylistTrackCounts(String baseUrl, String userToken, List<MusicPlaylistSummary> result) {
+        List<String> ids = result.stream()
+                .filter(summary -> summary != null && summary.id() != null && !summary.id().isBlank())
+                .map(MusicPlaylistSummary::id)
+                .toList();
+        if (ids.isEmpty()) {
+            return;
+        }
+
+        Map<String, Long> trackCounts = getWithRetry(
+                baseUrl + "/playlist/detail?ids=" + encode(String.join(",", ids)),
+                userToken,
+                KuGouAdapter::extractPlaylistTrackCounts
+        ).orElse(Map.of());
+
+        if (trackCounts.isEmpty()) {
+            return;
+        }
+
+        for (int i = 0; i < result.size(); i++) {
+            MusicPlaylistSummary summary = result.get(i);
+            Long trackCount = trackCounts.get(summary.id());
+            if (trackCount == null || trackCount <= 0) {
+                continue;
+            }
+
+            result.set(i, MusicPlaylistSummary.builder()
+                    .id(summary.id())
+                    .name(summary.name())
+                    .coverUrl(summary.coverUrl())
+                    .creatorName(summary.creatorName())
+                    .trackCount(trackCount)
+                    .playCount(summary.playCount())
+                    .description(summary.description())
+                    .source(summary.source())
+                    .build());
+        }
     }
 
     static JSONArray extractPlaylistItems(JSONObject json) {
@@ -488,7 +588,7 @@ public class KuGouAdapter extends AbstractMusicAdapter {
                         "image",
                         "banner_imgurl")))
                 .creatorName(firstNonBlank(item, "nickname", "username", "author_name"))
-                .trackCount(readLong(item, "songcount", "song_count", "trackCount", "count", "percount"))
+                .trackCount(readLong(item, "songcount", "song_count", "trackCount", "count"))
                 .playCount(readLong(item, "play_count", "playCount", "heat", "collectcount"))
                 .description(firstNonBlank(item, "intro", "description"))
                 .source("kg")
@@ -521,6 +621,48 @@ public class KuGouAdapter extends AbstractMusicAdapter {
                 .updateFrequency(firstNonBlank(item, "update_frequency", "updateFrequency", "publish"))
                 .source("kg")
                 .build();
+    }
+
+    static Map<String, Long> extractPlaylistTrackCounts(JSONObject json) {
+        JSONArray data = json.getJSONArray("data");
+        if (data == null || data.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<String, Long> result = new java.util.HashMap<>();
+        for (int i = 0; i < data.size(); i++) {
+            JSONObject item = data.getJSONObject(i);
+            if (item == null) {
+                continue;
+            }
+            String id = firstNonBlank(item, "global_collection_id", "parent_global_collection_id", "list_create_gid");
+            Long count = readLong(item, "count", "songcount", "trackCount");
+            if (id != null && count != null) {
+                result.put(id, count);
+            }
+        }
+        return result;
+    }
+
+    static String extractPlayUrlFromNewResponse(JSONObject json, String quality, String requestedHash) {
+        JSONArray data = json.getJSONArray("data");
+        if (data == null || data.isEmpty()) {
+            return null;
+        }
+
+        List<JSONObject> candidates = new ArrayList<>();
+        for (int i = 0; i < data.size(); i++) {
+            collectPlayableCandidates(data.getJSONObject(i), candidates);
+        }
+
+        for (String preferredQuality : qualityPreferences(quality)) {
+            String url = firstTrackerUrl(candidates, preferredQuality, requestedHash);
+            if (url != null) {
+                return url;
+            }
+        }
+
+        return firstTrackerUrl(candidates, null, requestedHash);
     }
 
     private JSONObject firstAudioItem(JSONObject json) {
@@ -616,6 +758,70 @@ public class KuGouAdapter extends AbstractMusicAdapter {
             }
         }
         return null;
+    }
+
+    private static void collectPlayableCandidates(JSONObject item, List<JSONObject> result) {
+        if (item == null) {
+            return;
+        }
+        result.add(item);
+
+        JSONArray related = item.getJSONArray("relate_goods");
+        if (related == null) {
+            return;
+        }
+        for (int i = 0; i < related.size(); i++) {
+            collectPlayableCandidates(related.getJSONObject(i), result);
+        }
+    }
+
+    private static String firstTrackerUrl(List<JSONObject> candidates, String preferredQuality, String requestedHash) {
+        for (JSONObject candidate : candidates) {
+            if (preferredQuality != null && !preferredQuality.equalsIgnoreCase(candidate.getString("quality"))) {
+                continue;
+            }
+            JSONArray urls = trackerUrls(candidate);
+            if (urls == null || urls.isEmpty()) {
+                continue;
+            }
+            if (requestedHash != null && requestedHash.equalsIgnoreCase(candidate.getString("hash"))) {
+                return urls.getString(0);
+            }
+        }
+
+        for (JSONObject candidate : candidates) {
+            if (preferredQuality != null && !preferredQuality.equalsIgnoreCase(candidate.getString("quality"))) {
+                continue;
+            }
+            JSONArray urls = trackerUrls(candidate);
+            if (urls != null && !urls.isEmpty()) {
+                return urls.getString(0);
+            }
+        }
+
+        return null;
+    }
+
+    private static JSONArray trackerUrls(JSONObject candidate) {
+        JSONObject info = firstObject(candidate, "info");
+        if (info == null) {
+            return null;
+        }
+        return info.getJSONArray("tracker_url");
+    }
+
+    private static List<String> qualityPreferences(String quality) {
+        return switch (quality != null ? quality : "320k") {
+            case "flac" -> List.of("flac", "high", "320", "128");
+            case "128k" -> List.of("128");
+            default -> List.of("320", "128");
+        };
+    }
+
+    private static void addIfPresent(Set<String> target, String value) {
+        if (value != null && !value.isBlank()) {
+            target.add(value);
+        }
     }
 
     private long readDurationMs(JSONObject... objects) {
