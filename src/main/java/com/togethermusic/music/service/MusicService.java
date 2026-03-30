@@ -576,7 +576,7 @@ public class MusicService {
     }
 
     private boolean supportsUserPlaylists(String source) {
-        return "wy".equalsIgnoreCase(source);
+        return "wy".equalsIgnoreCase(source) || "kg".equalsIgnoreCase(source);
     }
 
     private long resolvePosition(Music music, String status, long storedPosition, long updatedAt, long now) {

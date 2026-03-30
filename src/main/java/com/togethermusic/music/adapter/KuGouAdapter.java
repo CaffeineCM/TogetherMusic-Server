@@ -175,6 +175,40 @@ public class KuGouAdapter extends AbstractMusicAdapter {
     }
 
     @Override
+    public List<MusicPlaylistSummary> getUserPlaylists(String userToken) {
+        if (userToken == null || userToken.isBlank()) {
+            return List.of();
+        }
+
+        String baseUrl = properties.getMusicApi().getKugou();
+        List<MusicPlaylistSummary> result = new ArrayList<>();
+
+        getWithRetry(
+                baseUrl + "/user/playlist?page=1&pagesize=50",
+                userToken,
+                json -> {
+                    JSONArray items = extractPlaylistItems(json);
+                    if (items == null) {
+                        JSONObject data = firstObject(json, "data");
+                        items = firstArray(data, "list", "info", "playlists");
+                    }
+                    if (items == null) return null;
+
+                    for (int i = 0; i < items.size(); i++) {
+                        MusicPlaylistSummary summary = toPlaylistSummary(items.getJSONObject(i));
+                        if (summary != null) {
+                            result.add(summary);
+                        }
+                    }
+                    return result.isEmpty() ? null : result;
+                }
+        );
+
+        enrichPlaylistTrackCounts(baseUrl, userToken, result);
+        return result;
+    }
+
+    @Override
     public List<MusicToplistSummary> getToplists(String userToken) {
         String baseUrl = properties.getMusicApi().getKugou();
         List<MusicToplistSummary> result = new ArrayList<>();
