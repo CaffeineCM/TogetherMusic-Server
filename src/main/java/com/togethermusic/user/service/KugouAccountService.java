@@ -3,6 +3,8 @@ package com.togethermusic.user.service;
 import com.alibaba.fastjson2.JSONObject;
 import com.togethermusic.config.TogetherMusicProperties;
 import com.togethermusic.music.adapter.KuGouAdapter;
+import com.togethermusic.repository.RoomRedisRepository;
+import com.togethermusic.room.model.House;
 import com.togethermusic.user.dto.KugouAccountStatusResponse;
 import com.togethermusic.user.dto.KugouCaptchaSendResponse;
 import com.togethermusic.user.dto.KugouQrLoginCheckResponse;
@@ -29,6 +31,7 @@ public class KugouAccountService {
     private final UserMusicAccountRepository accountRepository;
     private final KuGouAdapter kuGouAdapter;
     private final TogetherMusicProperties properties;
+    private final RoomRedisRepository roomRepository;
 
     public KugouAccountStatusResponse importToken(Long userId, String token) {
         String normalized = token == null ? "" : token.trim();
@@ -308,6 +311,34 @@ public class KugouAccountService {
         account.setExpiresAt(null);
         account.setIsActive(true);
         accountRepository.save(account);
+        syncOwnedRoomsTokenHolder(userId);
+    }
+
+    private void syncOwnedRoomsTokenHolder(Long userId) {
+        if (userId == null) {
+            return;
+        }
+
+        for (House house : roomRepository.findAll()) {
+            if (!userId.equals(house.getCreatorUserId())) {
+                continue;
+            }
+
+            String source = house.getDefaultMusicSource();
+            if (source != null
+                    && !"kg".equalsIgnoreCase(source)
+                    && !"kugou".equalsIgnoreCase(source)) {
+                continue;
+            }
+
+            if (userId.equals(house.getTokenHolderUserId("kg"))) {
+                continue;
+            }
+
+            house.setTokenHolderUserId("kg", userId);
+            roomRepository.save(house);
+            log.info("[KugouAuth] Synced room {} token holder to user {}", house.getId(), userId);
+        }
     }
 
     private KugouAccountStatusResponse buildStatus(String token) {
