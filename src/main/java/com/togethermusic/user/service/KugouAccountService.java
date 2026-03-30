@@ -89,7 +89,12 @@ public class KugouAccountService {
             return invalid("酷狗登录成功但未返回 token");
         }
 
-        return persistAuthorizedAccount(userId, userToken, kgUserId, "酷狗授权成功");
+        saveAccount(userId, userToken, kgUserId);
+        return KugouAccountStatusResponse.builder()
+                .valid(true)
+                .nickname(firstNonBlank(firstObject(json, "data"), "nickname", "uname", "username"))
+                .message("酷狗授权成功")
+                .build();
     }
 
     public KugouQrLoginStartResponse startQrLogin() {
@@ -164,10 +169,17 @@ public class KugouAccountService {
         );
 
         if (StringUtils.hasText(token)) {
-            KugouAccountStatusResponse status = persistAuthorizedAccount(userId, token, kgUserId, "酷狗授权成功");
-            authorized = status.valid();
-            nickname = status.nickname();
-            message = status.message();
+            saveAccount(userId, token, kgUserId);
+            authorized = true;
+            nickname = firstNonBlank(
+                    json,
+                    "nickname",
+                    "data.nickname",
+                    "data.info.nickname",
+                    "data.uname",
+                    "data.username"
+            );
+            message = "酷狗授权成功";
         } else if (code == 4) {
             message = "二维码已确认，但未返回 token";
         }
@@ -240,6 +252,16 @@ public class KugouAccountService {
             return invalid("酷狗凭证校验失败");
         }
 
+        saveAccount(userId, token, kgUserId);
+
+        return KugouAccountStatusResponse.builder()
+                .valid(true)
+                .nickname(kuGouAdapter.getNickname(token).orElse(null))
+                .message(successMessage)
+                .build();
+    }
+
+    private void saveAccount(Long userId, String token, String kgUserId) {
         UserMusicAccount account = accountRepository.findByUserIdAndSource(userId, SOURCE)
                 .orElseGet(UserMusicAccount::new);
         account.setUserId(userId);
@@ -251,12 +273,6 @@ public class KugouAccountService {
         account.setExpiresAt(null);
         account.setIsActive(true);
         accountRepository.save(account);
-
-        return KugouAccountStatusResponse.builder()
-                .valid(true)
-                .nickname(kuGouAdapter.getNickname(token).orElse(null))
-                .message(successMessage)
-                .build();
     }
 
     private KugouAccountStatusResponse buildStatus(String token) {
