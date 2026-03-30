@@ -9,13 +9,24 @@ import com.togethermusic.music.dto.MusicPlaylistSummary;
 import com.togethermusic.music.dto.MusicToplistSummary;
 import com.togethermusic.music.model.Music;
 import com.togethermusic.music.service.MusicService;
+import kong.unirest.HttpResponse;
+import kong.unirest.Unirest;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.net.URI;
+import java.time.Duration;
+import java.util.Locale;
 
 @RestController
 @RequestMapping("/api/v1/music")
@@ -75,5 +86,68 @@ public class MusicSearchController {
     @GetMapping("/toplists")
     public Response<java.util.List<MusicToplistSummary>> toplists(@RequestParam String houseId) {
         return Response.success(musicService.getToplists(houseId));
+    }
+
+    @GetMapping("/image")
+    public ResponseEntity<byte[]> imageProxy(@RequestParam String url) {
+        URI uri;
+        try {
+            uri = URI.create(url);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        if (!isAllowedImageHost(uri)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+
+        HttpResponse<byte[]> response = Unirest.get(uri.toString())
+                .header("User-Agent",
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                                + "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36")
+                .header("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+                .header("Referer", "https://music.163.com/")
+                .asBytes();
+
+        if (response.getStatus() < 200 || response.getStatus() >= 300) {
+            return ResponseEntity.status(response.getStatus()).build();
+        }
+
+        String contentType = response.getHeaders().getFirst("Content-Type");
+        MediaType mediaType = MediaType.APPLICATION_OCTET_STREAM;
+        if (StringUtils.hasText(contentType)) {
+            try {
+                mediaType = MediaType.parseMediaType(contentType);
+            } catch (Exception ignored) {
+                mediaType = MediaType.APPLICATION_OCTET_STREAM;
+            }
+        }
+
+        return ResponseEntity.ok()
+                .contentType(mediaType)
+                .cacheControl(CacheControl.maxAge(Duration.ofDays(7)).cachePublic())
+                .header(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(response.getBody());
+    }
+
+    private boolean isAllowedImageHost(URI uri) {
+        String scheme = uri.getScheme();
+        String host = uri.getHost();
+        if (!StringUtils.hasText(scheme) || !StringUtils.hasText(host)) {
+            return false;
+        }
+
+        String normalizedScheme = scheme.toLowerCase(Locale.ROOT);
+        if (!"http".equals(normalizedScheme) && !"https".equals(normalizedScheme)) {
+            return false;
+        }
+
+        String normalizedHost = host.toLowerCase(Locale.ROOT);
+        return normalizedHost.endsWith(".music.126.net")
+                || normalizedHost.equals("music.126.net")
+                || normalizedHost.endsWith(".gtimg.cn")
+                || normalizedHost.equals("gtimg.cn")
+                || normalizedHost.endsWith(".kugou.com")
+                || normalizedHost.equals("kugou.com");
     }
 }
