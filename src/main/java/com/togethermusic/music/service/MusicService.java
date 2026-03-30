@@ -24,8 +24,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -97,6 +99,79 @@ public class MusicService {
         }
 
         validateAndAdd(houseId, sessionId, music, user.displayName());
+    }
+
+    public BatchPickResult pickPlaylist(String houseId, String sessionId, String playlistId, String source) {
+        SessionUser user = sessionRepo.get(houseId, sessionId).orElseThrow();
+        if (!user.isManager()) {
+            Boolean searchEnabled = configRepo.getBoolean(houseId, RoomConfig.SEARCH_ENABLED);
+            if (Boolean.FALSE.equals(searchEnabled)) {
+                throw new BusinessException(ErrorCode.MUSIC_SEARCH_DISABLED);
+            }
+        }
+
+        long maxSize = properties.getMusic().getPlaylistSize();
+        List<Music> currentList = pickListRepo.getAll(houseId);
+        int remaining = (int) Math.max(0, maxSize - currentList.size());
+        if (remaining <= 0) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "播放列表已满，最多 " + maxSize + " 首");
+        }
+
+        var adapterContext = adapterRouter.getAdapterForRoom(houseId, source);
+        List<Music> songs = adapterContext.getPlaylist(playlistId);
+        if (songs == null || songs.isEmpty()) {
+            throw new BusinessException(ErrorCode.MUSIC_NOT_FOUND, "歌单暂无可加入歌曲");
+        }
+
+        Set<String> existingIds = new HashSet<>();
+        currentList.stream().map(Music::getId).forEach(existingIds::add);
+
+        int added = 0;
+        int duplicate = 0;
+        int blacklisted = 0;
+        int overflow = 0;
+        long now = System.currentTimeMillis();
+
+        for (Music music : songs) {
+            if (music == null || music.getId() == null || music.getId().isBlank()) {
+                continue;
+            }
+            if (blackListRepo.isMusicBlacklisted(houseId, music.getId())) {
+                blacklisted++;
+                continue;
+            }
+            if (existingIds.contains(music.getId())) {
+                duplicate++;
+                continue;
+            }
+            if (remaining <= 0) {
+                overflow++;
+                continue;
+            }
+
+            music.setPickTime(now + added);
+            music.setPickedBy(sessionId);
+            pickListRepo.push(houseId, music);
+            existingIds.add(music.getId());
+            remaining--;
+            added++;
+        }
+
+        if (added == 0) {
+            if (duplicate > 0 && blacklisted == 0 && overflow == 0) {
+                throw new BusinessException(ErrorCode.MUSIC_ALREADY_IN_LIST, "歌单歌曲已在播放列表中");
+            }
+            if (overflow > 0) {
+                throw new BusinessException(ErrorCode.BAD_REQUEST, "播放列表剩余空间不足");
+            }
+            if (blacklisted > 0) {
+                throw new BusinessException(ErrorCode.BAD_REQUEST, "歌单歌曲不可加入播放列表");
+            }
+            throw new BusinessException(ErrorCode.MUSIC_NOT_FOUND, "歌单暂无可加入歌曲");
+        }
+
+        broadcaster.broadcastToRoom(houseId, MessageType.PICK, getPickList(houseId), "点歌列表");
+        return new BatchPickResult(added, duplicate, blacklisted, overflow);
     }
 
     private void validateAndAdd(String houseId, String sessionId, Music music, String displayName) {
@@ -403,7 +478,7 @@ public class MusicService {
     public List<Music> searchCandidates(String houseId, String keyword, String source, String quality) {
         var adapterContext = adapterRouter.getAdapterForRoom(houseId, source);
         return adapterContext.searchSongs(keyword, quality).stream()
-                .limit(12)
+                .limit(30)
                 .toList();
     }
 
@@ -504,4 +579,6 @@ public class MusicService {
         }
         return Math.max(0L, Math.min(positionMs, duration));
     }
+
+    public record BatchPickResult(int added, int duplicate, int blacklisted, int overflow) {}
 }

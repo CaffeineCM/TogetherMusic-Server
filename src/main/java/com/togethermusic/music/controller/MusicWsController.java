@@ -46,6 +46,26 @@ public class MusicWsController {
         }
     }
 
+    @MessageMapping("/music/pickPlaylist")
+    public void pickPlaylist(PickPlaylistRequest request, SimpMessageHeaderAccessor accessor) {
+        String sessionId = accessor.getSessionId();
+        String houseId = houseId(accessor);
+        if (houseId == null) { broadcaster.notifyUser(sessionId, "未加入任何房间"); return; }
+
+        try {
+            var result = musicService.pickPlaylist(houseId, sessionId, request.playlistId(), request.source());
+            broadcaster.notifyUser(
+                    sessionId,
+                    "已加入 " + result.added() + " 首"
+                            + (result.duplicate() > 0 ? "，跳过重复 " + result.duplicate() + " 首" : "")
+                            + (result.blacklisted() > 0 ? "，跳过黑名单 " + result.blacklisted() + " 首" : "")
+                            + (result.overflow() > 0 ? "，超出队列容量 " + result.overflow() + " 首" : "")
+            );
+        } catch (Exception e) {
+            broadcaster.notifyUser(sessionId, e.getMessage());
+        }
+    }
+
     // ---- 点赞 ----
 
     @MessageMapping("/music/good/{musicId}")
@@ -275,6 +295,7 @@ public class MusicWsController {
     // ---- 内部 DTO（record） ----
 
     public record PickRequest(String id, String name, String source, String quality) {}
+    public record PickPlaylistRequest(String playlistId, String source) {}
     public record MusicIdRequest(String id) {}
     public record DefaultPlaylistRequest(String playlistId, String source) {}
 }
