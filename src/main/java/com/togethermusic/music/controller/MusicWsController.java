@@ -42,6 +42,8 @@ public class MusicWsController {
                 musicService.pick(houseId, sessionId, request.name(), request.source(), request.quality());
             }
         } catch (Exception e) {
+            log.warn("WS pick failed: houseId={}, sessionId={}, source={}, id={}, name={}, error={}",
+                    houseId, sessionId, request.source(), request.id(), request.name(), e.getMessage(), e);
             broadcaster.notifyUser(sessionId, e.getMessage());
         }
     }

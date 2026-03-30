@@ -43,40 +43,7 @@ public class KuGouAdapter extends AbstractMusicAdapter {
         if (!songs.isEmpty()) {
             return getById(songs.get(0).getId(), quality, userToken);
         }
-
-        String baseUrl = properties.getMusicApi().getKugou();
-
-        // 搜索接口：/search?keyword=xxx&page=1&pagesize=1
-        Optional<JSONObject> firstResult = getWithRetry(
-                baseUrl + "/search?keyword=" + encode(keyword) + "&page=1&pagesize=1",
-                userToken,
-                json -> {
-                    if (!Integer.valueOf(1).equals(json.getInteger("status"))) return null;
-                    JSONObject data = json.getJSONObject("data");
-                    if (data == null) return null;
-                    JSONArray lists = data.getJSONArray("lists");
-                    if (lists == null || lists.isEmpty()) return null;
-                    return lists.getJSONObject(0);
-                }
-        );
-
-        if (firstResult.isEmpty()) return null;
-
-        JSONObject item = firstResult.get();
-        String hash = item.getString("FileHash");
-        String albumId = item.getString("AlbumID");
-
-        if (hash == null || hash.isBlank()) return null;
-
-        Music music = buildFromSearchItem(item, quality);
-        String playUrl = fetchPlayUrl(baseUrl, hash, albumId, quality, userToken);
-        if (playUrl == null || playUrl.isBlank()) {
-            log.warn("[kg] No playable URL for hash={}", hash);
-            return null;
-        }
-        music.setUrl(playUrl);
-        music.setId(hash); // 使用 hash 作为 ID
-        return music;
+        return null;
     }
 
     @Override
@@ -85,7 +52,7 @@ public class KuGouAdapter extends AbstractMusicAdapter {
         List<Music> result = new ArrayList<>();
 
         getWithRetry(
-                baseUrl + "/search?keyword=" + encode(keyword) + "&page=1&pagesize=30",
+                baseUrl + "/search?keywords=" + encode(keyword) + "&page=1&pagesize=30",
                 userToken,
                 json -> {
                     if (!Integer.valueOf(1).equals(json.getInteger("status"))) return null;
@@ -99,6 +66,7 @@ public class KuGouAdapter extends AbstractMusicAdapter {
                         if (hash == null || hash.isBlank()) continue;
                         Music music = buildFromSearchItem(item, quality);
                         music.setId(hash);
+                        music.setMediaMid(firstNonBlank(item, "AlbumID", "album_id"));
                         result.add(music);
                     }
                     return result;
@@ -110,32 +78,27 @@ public class KuGouAdapter extends AbstractMusicAdapter {
 
     @Override
     public Music getById(String id, String quality, String userToken) {
-        // id 即 hash
         String baseUrl = properties.getMusicApi().getKugou();
-
-        // 通过 hash 获取歌曲详情
         Optional<Music> musicOpt = getWithRetry(
-                baseUrl + "/song/detail?hash=" + id,
+                baseUrl + "/audio?hash=" + id,
                 userToken,
-                json -> {
-                    if (!Integer.valueOf(1).equals(json.getInteger("status"))) return null;
-                    JSONObject data = json.getJSONObject("data");
-                    if (data == null) return null;
-                    return buildFromDetail(data, id, quality);
-                }
+                json -> buildFromAudioResponse(json, id, quality)
         );
 
-        if (musicOpt.isEmpty()) return null;
+        if (musicOpt.isEmpty()) {
+            log.warn("[kg] No detail found for hash={}", id);
+            return null;
+        }
         Music music = musicOpt.get();
 
-        String albumId = music.getMediaMid(); // 借用 mediaMid 字段暂存 albumId
+        String albumId = music.getMediaMid();
         String playUrl = fetchPlayUrl(baseUrl, id, albumId, quality, userToken);
         if (playUrl == null || playUrl.isBlank()) {
-            log.warn("[kg] No playable URL for hash={}", id);
+            log.warn("[kg] No playable URL for hash={}, albumId={}", id, albumId);
             return null;
         }
         music.setUrl(playUrl);
-        music.setMediaMid(null); // 清除临时字段
+        music.setMediaMid(null);
         return music;
     }
 
@@ -144,11 +107,11 @@ public class KuGouAdapter extends AbstractMusicAdapter {
         String baseUrl = properties.getMusicApi().getKugou();
         List<Music> result = new ArrayList<>();
 
-        getWithRetry(baseUrl + "/playlist/detail?id=" + encode(playlistId), userToken, json -> {
-            JSONObject data = firstObject(json, "data", "playlist");
-            JSONArray tracks = firstArray(data, "songs", "list", "tracks");
+        getWithRetry(baseUrl + "/playlist/track/all?id=" + encode(playlistId) + "&page=1&pagesize=200", userToken, json -> {
+            JSONArray tracks = firstArray(json, "data");
             if (tracks == null) {
-                tracks = firstArray(json, "songs", "list", "tracks", "data");
+                JSONObject data = firstObject(json, "data");
+                tracks = firstArray(data, "info", "songs", "list", "tracks");
             }
             if (tracks == null) return null;
 
@@ -169,17 +132,11 @@ public class KuGouAdapter extends AbstractMusicAdapter {
         String baseUrl = properties.getMusicApi().getKugou();
         List<MusicPlaylistSummary> result = new ArrayList<>();
 
-        List<String> candidateUrls = List.of(
-                baseUrl + "/playlist/list?page=1&pagesize=24",
-                baseUrl + "/playlist/index?page=1&pagesize=24",
-                baseUrl + "/top/card"
+        loadPlaylistSummaries(
+                baseUrl + "/top/playlist?category_id=0&withsong=0&withtag=0&page=1&pagesize=24",
+                userToken,
+                result
         );
-
-        for (String url : candidateUrls) {
-            if (loadPlaylistSummaries(url, userToken, result)) {
-                break;
-            }
-        }
 
         return result;
     }
@@ -189,15 +146,16 @@ public class KuGouAdapter extends AbstractMusicAdapter {
         String baseUrl = properties.getMusicApi().getKugou();
         List<MusicToplistSummary> result = new ArrayList<>();
 
-        getWithRetry(baseUrl + "/top/card", userToken, json -> {
-            JSONArray cards = firstArray(json, "data", "list");
-            if (cards == null) {
-                cards = firstArray(firstObject(json, "data"), "cards", "list");
+        getWithRetry(baseUrl + "/rank/list", userToken, json -> {
+            JSONArray items = firstArray(json, "data");
+            if (items == null) {
+                JSONObject data = firstObject(json, "data");
+                items = firstArray(data, "info", "list");
             }
-            if (cards == null) return null;
+            if (items == null) return null;
 
-            for (int i = 0; i < cards.size(); i++) {
-                JSONObject item = cards.getJSONObject(i);
+            for (int i = 0; i < items.size(); i++) {
+                JSONObject item = items.getJSONObject(i);
                 MusicToplistSummary summary = parseToplistSummary(item);
                 if (summary != null) {
                     result.add(summary);
@@ -271,7 +229,7 @@ public class KuGouAdapter extends AbstractMusicAdapter {
         music.setArtist(firstNonBlank(item, "singername", "author_name", "artist", "filename"));
         music.setDuration(readDurationMs(item));
         music.setPictureUrl(firstNonBlank(item, "img", "image", "cover"));
-        music.setMediaMid(firstNonBlank(item, "album_id", "albumid"));
+        music.setMediaMid(firstNonBlank(item, "album_id", "albumid", "AlbumID"));
 
         if ((music.getArtist() == null || music.getArtist().isBlank())
                 && item.getString("filename") != null
@@ -290,6 +248,54 @@ public class KuGouAdapter extends AbstractMusicAdapter {
             music.setArtist("未知艺术家");
         }
 
+        return music;
+    }
+
+    private Music buildFromAudioResponse(JSONObject json, String hash, String quality) {
+        if (!Integer.valueOf(1).equals(json.getInteger("status"))) {
+            return null;
+        }
+
+        JSONObject item = firstAudioItem(json);
+        if (item == null) {
+            return null;
+        }
+
+        Music music = new Music();
+        music.setSource("kg");
+        music.setId(hash);
+        music.setQuality(quality != null ? quality : "320k");
+        music.setName(firstNonBlank(item, "audio_name", "song_name", "name"));
+        music.setArtist(firstNonBlank(item, "author_name", "singername", "author_name_original"));
+        music.setDuration(readDurationMs(item));
+        music.setPictureUrl(firstNonBlank(item, "img", "image", "cover", "sizable_cover"));
+        music.setLyric(firstNonBlank(item, "lyrics", "lyric"));
+        music.setMediaMid(firstNonBlank(item, "album_id", "albumid", "AlbumID"));
+
+        if ((music.getArtist() == null || music.getArtist().isBlank())
+                && item.getString("filename") != null
+                && item.getString("filename").contains(" - ")) {
+            String[] parts = item.getString("filename").split(" - ", 2);
+            music.setArtist(parts[0].trim());
+            if (music.getName() == null || music.getName().isBlank()) {
+                music.setName(parts[1].trim());
+            }
+        }
+
+        if ((music.getName() == null || music.getName().isBlank())
+                && item.getString("audio_name") != null
+                && item.getString("audio_name").contains(" - ")) {
+            String[] parts = item.getString("audio_name").split(" - ", 2);
+            music.setArtist(parts[0].trim());
+            music.setName(parts[1].trim());
+        }
+
+        if (music.getName() == null || music.getName().isBlank()) {
+            music.setName("未知歌曲");
+        }
+        if (music.getArtist() == null || music.getArtist().isBlank()) {
+            music.setArtist("未知艺术家");
+        }
         return music;
     }
 
@@ -352,7 +358,7 @@ public class KuGouAdapter extends AbstractMusicAdapter {
 
     private boolean loadPlaylistSummaries(String url, String userToken, List<MusicPlaylistSummary> result) {
         return getWithRetry(url, userToken, json -> {
-            JSONArray items = firstArray(json, "data", "list");
+            JSONArray items = firstArray(json, "data");
             if (items == null) {
                 JSONObject data = firstObject(json, "data");
                 items = firstArray(data, "info", "cards", "list", "playlists");
@@ -383,9 +389,9 @@ public class KuGouAdapter extends AbstractMusicAdapter {
         return MusicPlaylistSummary.builder()
                 .id(id)
                 .name(name)
-                .coverUrl(firstNonBlank(item, "imgurl", "cover", "pic", "image"))
+                .coverUrl(normalizeImageUrl(firstNonBlank(item, "imgurl", "cover", "pic", "image", "banner_imgurl")))
                 .creatorName(firstNonBlank(item, "nickname", "username", "author_name"))
-                .trackCount(readLong(item, "songcount", "trackCount", "count"))
+                .trackCount(readLong(item, "songcount", "song_count", "trackCount", "count"))
                 .playCount(readLong(item, "play_count", "playCount", "heat"))
                 .description(firstNonBlank(item, "intro", "description"))
                 .source("kg")
@@ -406,11 +412,29 @@ public class KuGouAdapter extends AbstractMusicAdapter {
         return MusicToplistSummary.builder()
                 .id(id)
                 .name(name)
-                .coverUrl(firstNonBlank(item, "imgurl", "cover", "pic", "image"))
-                .description(firstNonBlank(item, "intro", "description"))
-                .updateFrequency(firstNonBlank(item, "update_frequency", "updateFrequency"))
+                .coverUrl(normalizeImageUrl(firstNonBlank(item, "imgurl", "cover", "pic", "image")))
+                .description(firstNonBlank(item, "intro", "description", "rank_features"))
+                .updateFrequency(firstNonBlank(item, "update_frequency", "updateFrequency", "publish"))
                 .source("kg")
                 .build();
+    }
+
+    private JSONObject firstAudioItem(JSONObject json) {
+        if (json == null) {
+            return null;
+        }
+        Object data = json.get("data");
+        if (data instanceof JSONObject object) {
+            JSONArray info = firstArray(object, "info", "data", "list");
+            if (info != null && !info.isEmpty()) {
+                return info.getJSONObject(0);
+            }
+            return object;
+        }
+        if (data instanceof JSONArray array && !array.isEmpty()) {
+            return array.getJSONObject(0);
+        }
+        return null;
     }
 
     private JSONObject firstObject(JSONObject source, String... keys) {
@@ -462,6 +486,13 @@ public class KuGouAdapter extends AbstractMusicAdapter {
             }
         }
         return null;
+    }
+
+    private String normalizeImageUrl(String value) {
+        if (value == null || value.isBlank()) {
+            return value;
+        }
+        return value.replace("{size}", "240");
     }
 
     private Long readLong(JSONObject object, String... keys) {
