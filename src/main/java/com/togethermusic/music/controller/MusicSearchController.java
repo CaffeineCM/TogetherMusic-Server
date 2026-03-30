@@ -160,6 +160,8 @@ public class MusicSearchController {
                 || normalizedHost.equals("music.126.net")
                 || normalizedHost.endsWith(".gtimg.cn")
                 || normalizedHost.equals("gtimg.cn")
+                || normalizedHost.endsWith(".kgimg.com")
+                || normalizedHost.equals("kgimg.com")
                 || normalizedHost.endsWith(".kugou.com")
                 || normalizedHost.equals("kugou.com");
     }

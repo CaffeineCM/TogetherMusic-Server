@@ -104,6 +104,7 @@ public class KuGouAdapter extends AbstractMusicAdapter {
             return null;
         }
         music.setUrl(playUrl);
+        enrichMusicMetadataFromPlayableResource(baseUrl, buildPlayableHashCandidates(audioItem, id, quality), quality, userToken, music);
         music.setLyric(fetchLyric(baseUrl, audioItem, music.getName(), userToken));
         music.setMediaMid(null);
         return music;
@@ -537,6 +538,48 @@ public class KuGouAdapter extends AbstractMusicAdapter {
         return null;
     }
 
+    private void enrichMusicMetadataFromPlayableResource(
+            String baseUrl,
+            List<String> hashCandidates,
+            String quality,
+            String userToken,
+            Music music
+    ) {
+        if ((music.getPictureUrl() != null && !music.getPictureUrl().isBlank())
+                && (music.getArtist() != null && !music.getArtist().isBlank() && !"未知艺术家".equals(music.getArtist()))) {
+            return;
+        }
+
+        for (String hash : hashCandidates) {
+            Optional<PlayableResource> resource = getWithRetry(
+                    baseUrl + "/song/url/new?hash=" + hash,
+                    userToken,
+                    json -> extractPlayableResourceFromNewResponse(json, quality, hash)
+            );
+            if (resource.isEmpty()) {
+                continue;
+            }
+
+            PlayableResource playable = resource.get();
+            if ((music.getPictureUrl() == null || music.getPictureUrl().isBlank())
+                    && playable.imageUrl() != null
+                    && !playable.imageUrl().isBlank()) {
+                music.setPictureUrl(normalizeImageUrl(playable.imageUrl()));
+            }
+            if ((music.getArtist() == null || music.getArtist().isBlank() || "未知艺术家".equals(music.getArtist()))
+                    && playable.artist() != null
+                    && !playable.artist().isBlank()) {
+                music.setArtist(playable.artist());
+            }
+            if ((music.getName() == null || music.getName().isBlank() || "未知歌曲".equals(music.getName()))
+                    && playable.name() != null
+                    && !playable.name().isBlank()) {
+                music.setName(playable.name());
+            }
+            return;
+        }
+    }
+
     private String qualityParam(String quality) {
         return switch (quality != null ? quality : "320k") {
             case "flac" -> "flac";
@@ -732,6 +775,11 @@ public class KuGouAdapter extends AbstractMusicAdapter {
     }
 
     static String extractPlayUrlFromNewResponse(JSONObject json, String quality, String requestedHash) {
+        PlayableResource resource = extractPlayableResourceFromNewResponse(json, quality, requestedHash);
+        return resource != null ? resource.url() : null;
+    }
+
+    static PlayableResource extractPlayableResourceFromNewResponse(JSONObject json, String quality, String requestedHash) {
         JSONArray data = json.getJSONArray("data");
         if (data == null || data.isEmpty()) {
             return null;
@@ -743,13 +791,14 @@ public class KuGouAdapter extends AbstractMusicAdapter {
         }
 
         for (String preferredQuality : qualityPreferences(quality)) {
-            String url = firstTrackerUrl(candidates, preferredQuality, requestedHash);
-            if (url != null) {
-                return url;
+            JSONObject candidate = firstPlayableCandidate(candidates, preferredQuality, requestedHash);
+            if (candidate != null) {
+                return toPlayableResource(candidate);
             }
         }
 
-        return firstTrackerUrl(candidates, null, requestedHash);
+        JSONObject fallback = firstPlayableCandidate(candidates, null, requestedHash);
+        return fallback != null ? toPlayableResource(fallback) : null;
     }
 
     static JSONObject extractLyricCandidate(JSONObject json) {
@@ -898,7 +947,7 @@ public class KuGouAdapter extends AbstractMusicAdapter {
         }
     }
 
-    private static String firstTrackerUrl(List<JSONObject> candidates, String preferredQuality, String requestedHash) {
+    private static JSONObject firstPlayableCandidate(List<JSONObject> candidates, String preferredQuality, String requestedHash) {
         for (JSONObject candidate : candidates) {
             if (preferredQuality != null && !preferredQuality.equalsIgnoreCase(candidate.getString("quality"))) {
                 continue;
@@ -908,7 +957,7 @@ public class KuGouAdapter extends AbstractMusicAdapter {
                 continue;
             }
             if (requestedHash != null && requestedHash.equalsIgnoreCase(candidate.getString("hash"))) {
-                return urls.getString(0);
+                return candidate;
             }
         }
 
@@ -918,11 +967,26 @@ public class KuGouAdapter extends AbstractMusicAdapter {
             }
             JSONArray urls = trackerUrls(candidate);
             if (urls != null && !urls.isEmpty()) {
-                return urls.getString(0);
+                return candidate;
             }
         }
 
         return null;
+    }
+
+    private static PlayableResource toPlayableResource(JSONObject candidate) {
+        JSONArray urls = trackerUrls(candidate);
+        if (urls == null || urls.isEmpty()) {
+            return null;
+        }
+        JSONObject info = firstObject(candidate, "info");
+        JSONObject transParam = firstObject(candidate, "trans_param");
+        return new PlayableResource(
+                urls.getString(0),
+                firstNonBlank(info, "image"),
+                firstNonBlank(candidate, "name", "songname"),
+                firstNonBlank(candidate, "singername", "author_name")
+        );
     }
 
     private static JSONArray trackerUrls(JSONObject candidate) {
@@ -940,6 +1004,8 @@ public class KuGouAdapter extends AbstractMusicAdapter {
             default -> List.of("320", "128");
         };
     }
+
+    private record PlayableResource(String url, String imageUrl, String name, String artist) {}
 
     private static void addIfPresent(Set<String> target, String value) {
         if (value != null && !value.isBlank()) {
