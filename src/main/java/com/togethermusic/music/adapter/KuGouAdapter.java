@@ -104,6 +104,7 @@ public class KuGouAdapter extends AbstractMusicAdapter {
             return null;
         }
         music.setUrl(playUrl);
+        music.setLyric(fetchLyric(baseUrl, audioItem, music.getName(), userToken));
         music.setMediaMid(null);
         return music;
     }
@@ -250,12 +251,25 @@ public class KuGouAdapter extends AbstractMusicAdapter {
         JSONObject legacyAlbum = firstObject(item, "albuminfo");
         JSONArray authors = firstArray(item, "authors", "singerinfo");
 
-        String hash = firstNonBlank(item, "hash", "audio_id", "audioid", "FileHash", "EMixSongID");
+        String hash = firstNonBlank(
+                item,
+                "hash",
+                "FileHash",
+                "EMixSongID");
         if (hash == null) {
             hash = firstNonBlank(deprecated, "hash");
         }
         if (hash == null) {
-            hash = firstNonBlank(audioInfo, "hash_128", "hash_320", "hash_flac", "hash_high", "hash_super");
+            hash = firstNonBlank(
+                    audioInfo,
+                    "hash_128",
+                    "hash_320",
+                    "hash_flac",
+                    "hash_high",
+                    "hash_super");
+        }
+        if (hash == null) {
+            hash = firstNonBlank(item, "audio_id", "audioid");
         }
         if (hash == null) {
             return null;
@@ -448,6 +462,45 @@ public class KuGouAdapter extends AbstractMusicAdapter {
         addIfPresent(candidates, firstNonBlank(item, "hash_high"));
 
         return new ArrayList<>(candidates);
+    }
+
+    private String fetchLyric(String baseUrl, JSONObject audioItem, String keyword, String userToken) {
+        JSONObject candidate = searchLyricCandidate(baseUrl, audioItem, keyword, userToken);
+        if (candidate == null) {
+            return "";
+        }
+
+        String id = firstNonBlank(candidate, "id");
+        String accessKey = firstNonBlank(candidate, "accesskey", "accessKey");
+        if (id == null || accessKey == null) {
+            return "";
+        }
+
+        return getWithRetry(
+                baseUrl + "/lyric?id=" + encode(id) + "&accesskey=" + encode(accessKey) + "&fmt=lrc&decode=true",
+                userToken,
+                KuGouAdapter::extractLyricContent
+        ).orElse("");
+    }
+
+    private JSONObject searchLyricCandidate(String baseUrl, JSONObject audioItem, String keyword, String userToken) {
+        List<String> lyricSearchUrls = new ArrayList<>();
+        String hash = firstNonBlank(audioItem, "hash", "hash_128", "hash_320", "hash_flac", "hash_high");
+        if (hash != null && !hash.isBlank()) {
+            lyricSearchUrls.add(baseUrl + "/search/lyric?hash=" + encode(hash));
+        }
+        if (keyword != null && !keyword.isBlank()) {
+            lyricSearchUrls.add(baseUrl + "/search/lyric?keywords=" + encode(keyword));
+        }
+
+        for (String url : lyricSearchUrls) {
+            Optional<JSONObject> candidate = getWithRetry(url, userToken, KuGouAdapter::extractLyricCandidate);
+            if (candidate.isPresent()) {
+                return candidate.get();
+            }
+        }
+
+        return null;
     }
 
     private String qualityParam(String quality) {
@@ -663,6 +716,42 @@ public class KuGouAdapter extends AbstractMusicAdapter {
         }
 
         return firstTrackerUrl(candidates, null, requestedHash);
+    }
+
+    static JSONObject extractLyricCandidate(JSONObject json) {
+        if (json == null) {
+            return null;
+        }
+
+        JSONArray candidates = firstArray(json, "candidates", "data");
+        if (candidates != null && !candidates.isEmpty()) {
+            return candidates.getJSONObject(0);
+        }
+
+        JSONObject data = firstObject(json, "data");
+        if (data != null) {
+            JSONArray nestedCandidates = firstArray(data, "candidates", "candidate", "info");
+            if (nestedCandidates != null && !nestedCandidates.isEmpty()) {
+                return nestedCandidates.getJSONObject(0);
+            }
+        }
+
+        return null;
+    }
+
+    static String extractLyricContent(JSONObject json) {
+        if (json == null) {
+            return "";
+        }
+
+        String decoded = firstNonBlank(json, "decodeContent");
+        if (decoded != null) {
+            return decoded;
+        }
+
+        JSONObject data = firstObject(json, "data");
+        decoded = firstNonBlank(data, "decodeContent", "lyric", "content");
+        return decoded != null ? decoded : "";
     }
 
     private JSONObject firstAudioItem(JSONObject json) {

@@ -5,8 +5,10 @@ import com.togethermusic.common.websocket.MessageType;
 import com.togethermusic.repository.RoomRedisRepository;
 import com.togethermusic.repository.SessionRedisRepository;
 import com.togethermusic.room.dto.RoomTokenStatusResponse;
+import com.togethermusic.room.dto.RoomTokenStatusResponse.SourceAuthStatus;
 import com.togethermusic.room.dto.SetMusicSourceRequest;
 import com.togethermusic.room.dto.TransferTokenRequest;
+import com.togethermusic.room.dto.UnlinkTokenRequest;
 import com.togethermusic.room.model.House;
 import com.togethermusic.room.model.SessionUser;
 import com.togethermusic.room.service.RoomService;
@@ -18,16 +20,21 @@ import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.stereotype.Controller;
 
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
  * 房间 Token 管理 WebSocket Controller
- * 处理音乐源设置、Token 持有者转移、授权状态查询等
+ * 每个音乐源（wy / qq / kg）独立维护 Token 持有者
  */
 @Slf4j
 @Controller
 @RequiredArgsConstructor
 public class RoomTokenController {
+
+    private static final List<String> SUPPORTED_SOURCES = List.of("wy", "qq", "kg");
 
     private final RoomRedisRepository roomRepository;
     private final SessionRedisRepository sessionRepository;
@@ -37,7 +44,7 @@ public class RoomTokenController {
     private final MessageBroadcaster broadcaster;
 
     /**
-     * 获取当前房间 Token 授权状态
+     * 获取当前房间各源的 Token 授权状态
      * SEND /room/token-status
      */
     @MessageMapping("/room/token-status")
@@ -60,17 +67,22 @@ public class RoomTokenController {
     }
 
     /**
-     * 房主取消授权
-     * SEND /room/unlink-token
+     * 房主取消指定源的授权
+     * SEND /room/unlink-token  body: { source: "wy" }
      */
     @MessageMapping("/room/unlink-token")
-    public void unlinkToken(StompHeaderAccessor accessor) {
+    public void unlinkToken(UnlinkTokenRequest request, StompHeaderAccessor accessor) {
         String houseId = getHouseIdFromSession(accessor);
         String sessionId = accessor.getSessionId();
         Long userId = getUserIdFromSession(accessor);
+        String source = request.getSource();
 
         if (houseId == null) {
             broadcaster.sendToUser(sessionId, MessageType.NOTICE, "您不在任何房间中");
+            return;
+        }
+        if (source == null || source.isBlank()) {
+            broadcaster.sendToUser(sessionId, MessageType.NOTICE, "请指定要取消授权的音乐源");
             return;
         }
 
@@ -85,29 +97,35 @@ public class RoomTokenController {
             return;
         }
 
-        house.setTokenHolderUserId(null);
+        house.setTokenHolderUserId(source, null);
         roomRepository.save(house);
 
-        log.info("[RoomToken] House {} creator {} unlinked token", houseId, userId);
+        log.info("[RoomToken] House {} creator {} unlinked token for source {}", houseId, userId, source);
 
-        // 通知本人状态更新
         broadcaster.sendToUser(sessionId, MessageType.TOKEN_STATUS, buildStatusResponse(house));
-        broadcaster.broadcastToRoom(houseId, MessageType.NOTICE, "房主已取消音乐授权");
+        broadcaster.broadcastToRoom(houseId, MessageType.NOTICE,
+                "房主已取消 " + sourceLabel(source) + " 授权");
     }
 
     /**
-     * 设置房间音乐源和 Token 持有者
-     * 房主：可随时设置；管理员：仅当房主未授权时可设置
-     * SEND /room/set-music-source
+     * 设置指定源的 Token 持有者（房主/管理员）
+     * 房主：随时可设置任意源
+     * 管理员：仅当该源房主未授权时可设置自己
+     * SEND /room/set-music-source  body: { houseId, source, useMyAccount, targetUserId? }
      */
     @MessageMapping("/room/set-music-source")
     public void setMusicSource(SetMusicSourceRequest request, StompHeaderAccessor accessor) {
         String houseId = request.getHouseId();
         String sessionId = accessor.getSessionId();
         Long userId = getUserIdFromSession(accessor);
+        String source = request.getSource();
 
-        log.info("[RoomToken] Session {} setting music source for house {}: source={}",
-                sessionId, houseId, request.getSource());
+        log.info("[RoomToken] Session {} setting token for house {} source {}", sessionId, houseId, source);
+
+        if (source == null || source.isBlank()) {
+            broadcaster.sendToUser(sessionId, MessageType.NOTICE, "请指定音乐源");
+            return;
+        }
 
         House house = roomRepository.findById(houseId).orElse(null);
         if (house == null) {
@@ -123,52 +141,58 @@ public class RoomTokenController {
             return;
         }
 
-        // 管理员只有在房主未授权时才能设置
-        if (!isCreator && isAdmin) {
-            boolean creatorHasAuthorized = house.getCreatorUserId() != null
-                    && house.getCreatorUserId().equals(house.getTokenHolderUserId());
-            if (creatorHasAuthorized) {
-                broadcaster.sendToUser(sessionId, MessageType.NOTICE, "房主已授权，管理员暂不可设置");
-                return;
-            }
-        }
-
-        if (request.getSource() != null) {
-            house.setDefaultMusicSource(request.getSource());
+        // 管理员只有在该源房主未授权时才能设置
+        if (!isCreator && isAdmin && house.creatorHasAuthorized(source)) {
+            broadcaster.sendToUser(sessionId, MessageType.NOTICE,
+                    "房主已为 " + sourceLabel(source) + " 授权，管理员暂不可设置");
+            return;
         }
 
         // 确定 Token 持有者
         Long tokenHolderId = null;
         if (Boolean.TRUE.equals(request.getUseMyAccount())) {
-            tokenHolderId = userId;
-        } else if (request.getTargetUserId() != null && isCreator) {
-            // 仅房主可以指定他人账号
-            String dbSource = mapSourceCode(request.getSource());
+            // 验证自己确实绑定了该源的账号
             boolean hasAccount = accountRepository
-                    .findByUserIdAndSource(request.getTargetUserId(), dbSource)
+                    .findByUserIdAndSource(userId, mapSourceCode(source))
                     .isPresent();
             if (!hasAccount) {
                 broadcaster.sendToUser(sessionId, MessageType.NOTICE,
-                        "目标用户未绑定 " + request.getSource() + " 账号");
+                        "您未绑定 " + sourceLabel(source) + " 账号，请先在个人中心完成授权");
+                return;
+            }
+            tokenHolderId = userId;
+        } else if (request.getTargetUserId() != null && isCreator) {
+            // 仅房主可以指定他人账号
+            boolean hasAccount = accountRepository
+                    .findByUserIdAndSource(request.getTargetUserId(), mapSourceCode(source))
+                    .isPresent();
+            if (!hasAccount) {
+                broadcaster.sendToUser(sessionId, MessageType.NOTICE,
+                        "目标用户未绑定 " + sourceLabel(source) + " 账号");
                 return;
             }
             tokenHolderId = request.getTargetUserId();
         }
 
-        house.setTokenHolderUserId(tokenHolderId);
+        house.setTokenHolderUserId(source, tokenHolderId);
+
+        // 如果设置了 source，同时更新默认音乐源
+        if (Boolean.TRUE.equals(request.getUseMyAccount()) || request.getTargetUserId() != null) {
+            house.setDefaultMusicSource(source);
+        }
+
         roomRepository.save(house);
 
         broadcaster.sendToUser(sessionId, MessageType.TOKEN_STATUS, buildStatusResponse(house));
         broadcaster.broadcastToRoom(houseId, MessageType.NOTICE,
-                "音乐授权已更新: " + (request.getSource() != null ? request.getSource() : house.getDefaultMusicSource()));
+                sourceLabel(source) + " 授权已更新");
 
-        log.info("[RoomToken] House {} music source set to {}, token holder: {}",
-                houseId, house.getDefaultMusicSource(), tokenHolderId);
+        log.info("[RoomToken] House {} source {} token holder set to {}", houseId, source, tokenHolderId);
     }
 
     /**
-     * 创建人转移 Token 持有者权限给其他人
-     * SEND /room/transfer-token-holder
+     * 创建人转移指定源的 Token 持有者权限
+     * SEND /room/transfer-token-holder  body: { houseId, source, targetUserId }
      */
     @MessageMapping("/room/transfer-token-holder")
     public void transferTokenHolder(TransferTokenRequest request, StompHeaderAccessor accessor) {
@@ -176,9 +200,10 @@ public class RoomTokenController {
         String sessionId = accessor.getSessionId();
         Long userId = getUserIdFromSession(accessor);
         Long targetUserId = request.getTargetUserId();
+        String source = request.getSource();
 
-        log.info("[RoomToken] Session {} transferring token holder of house {} to user {}",
-                sessionId, houseId, targetUserId);
+        log.info("[RoomToken] Session {} transferring {} token of house {} to user {}",
+                sessionId, source, houseId, targetUserId);
 
         House house = roomRepository.findById(houseId).orElse(null);
         if (house == null) {
@@ -188,6 +213,11 @@ public class RoomTokenController {
 
         if (!isCreator(house, userId)) {
             broadcaster.sendToUser(sessionId, MessageType.NOTICE, "只有房间创建人可以转移 Token 持有者权限");
+            return;
+        }
+
+        if (source == null || source.isBlank()) {
+            broadcaster.sendToUser(sessionId, MessageType.NOTICE, "请指定音乐源");
             return;
         }
 
@@ -201,20 +231,16 @@ public class RoomTokenController {
             return;
         }
 
-        String defaultSource = house.getDefaultMusicSource();
-        if (defaultSource != null) {
-            String dbSource = mapSourceCode(defaultSource);
-            boolean hasAccount = accountRepository
-                    .findByUserIdAndSource(targetUserId, dbSource)
-                    .isPresent();
-            if (!hasAccount) {
-                broadcaster.sendToUser(sessionId, MessageType.NOTICE,
-                        "目标用户未绑定 " + defaultSource + " 账号");
-                return;
-            }
+        boolean hasAccount = accountRepository
+                .findByUserIdAndSource(targetUserId, mapSourceCode(source))
+                .isPresent();
+        if (!hasAccount) {
+            broadcaster.sendToUser(sessionId, MessageType.NOTICE,
+                    "目标用户未绑定 " + sourceLabel(source) + " 账号");
+            return;
         }
 
-        house.setTokenHolderUserId(targetUserId);
+        house.setTokenHolderUserId(source, targetUserId);
         roomRepository.save(house);
 
         String targetNickname = userRepository.findById(targetUserId)
@@ -222,40 +248,25 @@ public class RoomTokenController {
                 .orElse("未知用户");
 
         broadcaster.broadcastToRoom(houseId, MessageType.NOTICE,
-                "Token 持有者已转移给: " + targetNickname);
+                sourceLabel(source) + " Token 持有者已转移给: " + targetNickname);
 
-        log.info("[RoomToken] House {} token holder transferred to user {} ({})",
-                houseId, targetUserId, targetNickname);
+        log.info("[RoomToken] House {} source {} token holder transferred to user {} ({})",
+                houseId, source, targetUserId, targetNickname);
     }
 
     /**
-     * 获取当前房间的 Token 持有者信息（旧接口，保持兼容）
+     * 获取当前房间的 Token 信息（旧接口，保持兼容）
      * SEND /room/token-holder
      */
     @MessageMapping("/room/token-holder")
     public void getTokenHolder(StompHeaderAccessor accessor) {
-        String houseId = getHouseIdFromSession(accessor);
-        String sessionId = accessor.getSessionId();
-
-        if (houseId == null) {
-            broadcaster.sendToUser(sessionId, MessageType.NOTICE, "您不在任何房间中");
-            return;
-        }
-
-        House house = roomRepository.findById(houseId).orElse(null);
-        if (house == null) {
-            broadcaster.sendToUser(sessionId, MessageType.NOTICE, "房间不存在");
-            return;
-        }
-
-        broadcaster.sendToUser(sessionId, MessageType.TOKEN_STATUS, buildStatusResponse(house));
+        getTokenStatus(accessor);
     }
 
     // ========== 辅助方法 ==========
 
     private RoomTokenStatusResponse buildStatusResponse(House house) {
         Long creatorId = house.getCreatorUserId();
-        Long tokenHolderId = house.getTokenHolderUserId();
 
         String creatorDisplayName = null;
         if (creatorId != null) {
@@ -264,27 +275,37 @@ public class RoomTokenController {
                     .orElse(null);
         }
 
-        String tokenHolderDisplayName = null;
-        if (tokenHolderId != null && tokenHolderId.equals(creatorId)) {
-            tokenHolderDisplayName = creatorDisplayName;
-        } else if (tokenHolderId != null) {
-            tokenHolderDisplayName = userRepository.findById(tokenHolderId)
-                    .map(u -> Optional.ofNullable(u.getNickname()).orElse(u.getUsername()))
-                    .orElse(null);
-        }
+        Map<String, SourceAuthStatus> sourceStatuses = new LinkedHashMap<>();
+        for (String source : SUPPORTED_SOURCES) {
+            Long tokenHolderId = house.getTokenHolderUserId(source);
+            boolean creatorHasAuthorized = house.creatorHasAuthorized(source);
+            boolean adminCanAuthorize = !creatorHasAuthorized;
 
-        boolean creatorHasAuthorized = creatorId != null && creatorId.equals(tokenHolderId);
-        boolean adminCanAuthorize = !creatorHasAuthorized;
+            String tokenHolderDisplayName = null;
+            if (tokenHolderId != null) {
+                if (tokenHolderId.equals(creatorId)) {
+                    tokenHolderDisplayName = creatorDisplayName;
+                } else {
+                    tokenHolderDisplayName = userRepository.findById(tokenHolderId)
+                            .map(u -> Optional.ofNullable(u.getNickname()).orElse(u.getUsername()))
+                            .orElse(null);
+                }
+            }
+
+            sourceStatuses.put(source, new SourceAuthStatus(
+                    creatorHasAuthorized,
+                    tokenHolderId,
+                    tokenHolderDisplayName,
+                    adminCanAuthorize
+            ));
+        }
 
         return new RoomTokenStatusResponse(
                 house.getId(),
                 house.getDefaultMusicSource(),
                 creatorId,
                 creatorDisplayName,
-                creatorHasAuthorized,
-                tokenHolderId,
-                tokenHolderDisplayName,
-                adminCanAuthorize
+                sourceStatuses
         );
     }
 
@@ -299,9 +320,7 @@ public class RoomTokenController {
     }
 
     private boolean isCreator(House house, Long userId) {
-        if (userId == null || house.getCreatorUserId() == null) {
-            return false;
-        }
+        if (userId == null || house.getCreatorUserId() == null) return false;
         return house.getCreatorUserId().equals(userId);
     }
 
@@ -318,6 +337,16 @@ public class RoomTokenController {
             case "qq" -> "qq";
             case "kg" -> "kugou";
             default -> adapterSourceCode;
+        };
+    }
+
+    private String sourceLabel(String source) {
+        if (source == null) return "未知";
+        return switch (source) {
+            case "wy" -> "网易云";
+            case "qq" -> "QQ 音乐";
+            case "kg" -> "酷狗";
+            default -> source;
         };
     }
 }

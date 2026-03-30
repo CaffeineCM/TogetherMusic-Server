@@ -95,6 +95,12 @@ public class MusicService {
         var adapterContext = adapterRouter.getAdapterForRoom(houseId, source);
         Music music = adapterContext.getById(musicId, quality);
         if (music == null) {
+            if ("kg".equalsIgnoreCase(source) || "kugou".equalsIgnoreCase(source)) {
+                throw new BusinessException(
+                        ErrorCode.MUSIC_NOT_FOUND,
+                        "该歌曲当前不可播放，可能需要会员或当前账号暂无播放权限"
+                );
+            }
             throw new BusinessException(ErrorCode.MUSIC_NOT_FOUND);
         }
 

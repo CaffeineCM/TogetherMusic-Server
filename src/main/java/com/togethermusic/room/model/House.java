@@ -6,6 +6,8 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.io.Serializable;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * 房间模型，存储于 Redis
@@ -58,9 +60,36 @@ public class House implements Serializable {
     /** 创建人用户ID（拥有最高权限，不可转移） */
     private Long creatorUserId;
 
-    /** 当前 Token 持有者用户ID（音乐 API 使用此用户的 Token） */
-    private Long tokenHolderUserId;
+    /**
+     * 各音乐源的 Token 持有者用户ID（source -> userId）
+     * key: 适配器 sourceCode（wy / qq / kg）
+     * value: 持有该源授权的用户ID
+     */
+    @Builder.Default
+    private Map<String, Long> tokenHolderUserIds = new HashMap<>();
 
-    /** 默认音乐源: netease, qq, kugou */
+    /** 默认音乐源: wy, qq, kg */
     private String defaultMusicSource;
+
+    /** 获取指定源的 Token 持有者，null 表示该源未授权 */
+    public Long getTokenHolderUserId(String source) {
+        if (tokenHolderUserIds == null || source == null) return null;
+        return tokenHolderUserIds.get(source);
+    }
+
+    /** 设置指定源的 Token 持有者 */
+    public void setTokenHolderUserId(String source, Long userId) {
+        if (tokenHolderUserIds == null) tokenHolderUserIds = new HashMap<>();
+        if (userId == null) {
+            tokenHolderUserIds.remove(source);
+        } else {
+            tokenHolderUserIds.put(source, userId);
+        }
+    }
+
+    /** 判断房主是否对指定源已授权 */
+    public boolean creatorHasAuthorized(String source) {
+        if (creatorUserId == null) return false;
+        return creatorUserId.equals(getTokenHolderUserId(source));
+    }
 }

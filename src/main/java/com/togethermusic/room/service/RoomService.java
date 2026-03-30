@@ -56,15 +56,15 @@ public class RoomService {
         boolean needPwd = StringUtils.hasText(request.password());
         boolean canDestroy = !Boolean.TRUE.equals(request.keepRoom());
 
-        // 确定 Token 持有者：如果创建者绑定了默认音乐源的账号，则使用创建者的账号
-        Long tokenHolderId = null;
+        // 确定初始 Token 持有者：如果创建者绑定了默认音乐源的账号，则将该源的 token 指向创建者
+        java.util.Map<String, Long> tokenHolderUserIds = new java.util.HashMap<>();
         if (creatorUserId != null && defaultSource != null) {
             String dbSource = mapSourceCode(defaultSource);
             boolean hasAccount = accountRepository
                     .findByUserIdAndSource(creatorUserId, dbSource)
                     .isPresent();
             if (hasAccount) {
-                tokenHolderId = creatorUserId;
+                tokenHolderUserIds.put(defaultSource, creatorUserId);
             }
         }
 
@@ -81,14 +81,14 @@ public class RoomService {
                 .enableStatus(false)
                 .adminPwd(request.adminPwd())
                 .creatorUserId(creatorUserId)
-                .tokenHolderUserId(tokenHolderId)
+                .tokenHolderUserIds(tokenHolderUserIds)
                 .defaultMusicSource(defaultSource)
                 .build();
 
         roomRepository.save(house);
         roomRepository.addIpHouse(remoteAddress, houseId);
-        log.info("Room created: id={}, name={}, creator={}, tokenHolder={}, keepRoom={}",
-                houseId, request.name(), creatorUserId, tokenHolderId, Boolean.TRUE.equals(request.keepRoom()));
+        log.info("Room created: id={}, name={}, creator={}, tokenHolders={}, keepRoom={}",
+                houseId, request.name(), creatorUserId, tokenHolderUserIds, Boolean.TRUE.equals(request.keepRoom()));
         return house;
     }
 

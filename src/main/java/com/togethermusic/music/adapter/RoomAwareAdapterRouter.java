@@ -39,9 +39,9 @@ public class RoomAwareAdapterRouter {
             return AdapterContext.of(registry.get(source), null);
         }
 
-        Long tokenHolderId = house.getTokenHolderUserId();
+        Long tokenHolderId = house.getTokenHolderUserId(source);
         if (tokenHolderId == null) {
-            log.debug("[Router] House {} has no token holder, using system default", houseId);
+            log.debug("[Router] House {} has no token holder for source {}, using system default", houseId, source);
             return AdapterContext.of(registry.get(source), null);
         }
 
@@ -79,27 +79,27 @@ public class RoomAwareAdapterRouter {
      */
     public boolean hasUserToken(String houseId, String source) {
         House house = roomRepository.findById(houseId).orElse(null);
-        if (house == null || house.getTokenHolderUserId() == null) {
+        if (house == null || house.getTokenHolderUserId(source) == null) {
             return false;
         }
 
         return accountRepository
-                .findByUserIdAndSource(house.getTokenHolderUserId(), mapSourceCode(source))
+                .findByUserIdAndSource(house.getTokenHolderUserId(source), mapSourceCode(source))
                 .map(UserMusicAccount::isValid)
                 .orElse(false);
     }
 
     /**
-     * 获取房间的 Token 持有者信息
+     * 获取房间指定源的 Token 持有者信息
      */
-    public Optional<TokenHolderInfo> getTokenHolderInfo(String houseId) {
+    public Optional<TokenHolderInfo> getTokenHolderInfo(String houseId, String source) {
         House house = roomRepository.findById(houseId).orElse(null);
-        if (house == null || house.getTokenHolderUserId() == null) {
+        if (house == null || house.getTokenHolderUserId(source) == null) {
             return Optional.empty();
         }
 
         return Optional.of(new TokenHolderInfo(
-                house.getTokenHolderUserId(),
+                house.getTokenHolderUserId(source),
                 house.getCreatorUserId()
         ));
     }

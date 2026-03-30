@@ -17,4 +17,9 @@ public class TransferTokenRequest {
      * 目标用户ID（新的 Token 持有者）
      */
     private Long targetUserId;
+
+    /**
+     * 要转移的音乐源：wy, qq, kg
+     */
+    private String source;
 }
