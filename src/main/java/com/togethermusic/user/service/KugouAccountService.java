@@ -78,17 +78,41 @@ public class KugouAccountService {
 
     public KugouQrLoginStartResponse startQrLogin() {
         JSONObject keyJson = get(baseUrl() + "/login/qr/key?timestamp=" + System.currentTimeMillis()).orElse(null);
-        String key = firstNonBlank(keyJson, "key", "data.key");
-        if (!StringUtils.hasText(key)) {
-            return KugouQrLoginStartResponse.builder().build();
+        String key = firstNonBlank(keyJson, "key", "data.key", "codekey", "data.codekey", "qrcode", "data.qrcode");
+
+        JSONObject qrJson = null;
+        if (StringUtils.hasText(key)) {
+            qrJson = get(baseUrl() + "/login/qr/create?key=" + encode(key) + "&qrimg=true&timestamp="
+                    + System.currentTimeMillis()).orElse(null);
+        }
+        if (qrJson == null) {
+            qrJson = get(baseUrl() + "/login/qr/create?qrimg=true&timestamp="
+                    + System.currentTimeMillis()).orElse(null);
         }
 
-        JSONObject qrJson = get(baseUrl() + "/login/qr/create?key=" + encode(key) + "&qrimg=true&timestamp="
-                + System.currentTimeMillis()).orElse(null);
+        String effectiveKey = StringUtils.hasText(key)
+                ? key
+                : firstNonBlank(qrJson, "key", "data.key", "codekey", "data.codekey", "qrcode", "data.qrcode");
         return KugouQrLoginStartResponse.builder()
-                .key(key)
-                .qrUrl(firstNonBlank(qrJson, "url", "data.url", "qrurl", "data.qrurl"))
-                .qrImage(firstNonBlank(qrJson, "qrimg", "data.qrimg", "base64", "data.base64"))
+                .key(effectiveKey)
+                .qrUrl(firstNonBlank(
+                        qrJson,
+                        "url",
+                        "data.url",
+                        "qrurl",
+                        "data.qrurl",
+                        "qrUrl",
+                        "data.qrUrl"
+                ))
+                .qrImage(firstNonBlank(
+                        qrJson,
+                        "qrimg",
+                        "data.qrimg",
+                        "base64",
+                        "data.base64",
+                        "qrImage",
+                        "data.qrImage"
+                ))
                 .build();
     }
 
